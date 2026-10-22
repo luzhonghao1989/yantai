@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {Schema} from '../frontend/node_modules/prosemirror-model/dist/index.js';
+import {EditorState} from '../frontend/node_modules/prosemirror-state/dist/index.js';
+import {history,closeHistory,undo} from '../frontend/node_modules/prosemirror-history/dist/index.js';
+import {blankLineRanges} from '../frontend/src/remove-blank-lines.ts';
+const schema=new Schema({nodes:{doc:{content:'paragraph+'},paragraph:{content:'inline*',group:'block'},text:{group:'inline'},hardBreak:{inline:true,group:'inline'}},marks:{bold:{}}});
+const text=s=>schema.text(s), br=()=>schema.node('hardBreak'), p=(...c)=>schema.node('paragraph',null,c), doc=(...c)=>schema.node('doc',null,c);
+const original=doc(p(),p(text('　 \t')),p(schema.text('第一段',[schema.mark('bold')])),p(br(),text('第二段'),br(),text(' '),br(),text('第三段'),br(),br()),p());
+let state=EditorState.create({schema,doc:original,plugins:[history()]});
+let tr=closeHistory(state.tr);for(const r of blankLineRanges(state.doc).reverse())tr=tr.delete(r.from,r.to);state=state.apply(tr);state=state.apply(closeHistory(state.tr));
+assert.deepEqual(state.doc.toJSON(),doc(p(schema.text('第一段',[schema.mark('bold')])),p(text('第二段'),br(),text('第三段'))).toJSON());
+assert.deepEqual(blankLineRanges(state.doc),[]);
+assert(undo(state,t=>{state=state.apply(t)}));assert(state.doc.eq(original));
+state=EditorState.create({schema,doc:doc(p(),p(text(' ')))});tr=state.tr;for(const r of blankLineRanges(state.doc).reverse())tr=tr.delete(r.from,r.to);state=state.apply(tr);assert(state.doc.childCount===1);assert(state.doc.textContent==='');
+console.log('Blank-line removal: paragraph/hard-break whitespace, marks, undo, all-empty passed');

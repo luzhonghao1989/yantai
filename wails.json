@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "NovelEdit",
+  "outputfilename": "NovelEdit",
+  "frontend:install": "npm.cmd install",
+  "frontend:build": "npm.cmd run build",
+  "frontend:dev:watcher": "npm.cmd run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "NovelEdit",
+    "email": ""
+  },
+  "info": {
+    "productName": "砚台",
+    "productVersion": "0.4.1"
+  }
+}
