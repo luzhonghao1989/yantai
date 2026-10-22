@@ -13,13 +13,13 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"novel_edit/frontend"
-	"novel_edit/internal/workspace"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
+	"yantai/frontend"
+	"yantai/internal/workspace"
 )
 
 type App struct {
@@ -90,7 +90,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	root := os.Getenv("NOVEL_EDIT_DATA")
+	root := os.Getenv("YANTAI_DATA")
+	if root == "" {
+		root = os.Getenv("NOVEL_EDIT_DATA")
+	}
 	if root == "" {
 		root = filepath.Join(filepath.Dir(exe), "data")
 	}
@@ -109,7 +112,7 @@ func main() {
 			os.Remove(a.connectionPath)
 		}
 	}()
-	smoke := os.Getenv("NOVEL_EDIT_SMOKE") == "1"
+	smoke := os.Getenv("YANTAI_SMOKE") == "1" || os.Getenv("NOVEL_EDIT_SMOKE") == "1"
 	instanceID := "f13ef385-92fb-4a6d-beb9-f3e6c4cbabde"
 	if smoke {
 		instanceID = "8d6a27b4-fcbd-486d-b3cf-184ad3ee33bf"
@@ -123,7 +126,7 @@ func main() {
 		}
 	}()
 	defer httpServer.Close()
-	err = wails.Run(&options.App{Title: "砚台 · 小说写作工作台", Width: 1500, Height: 960, MinWidth: 1050, MinHeight: 700, StartHidden: smoke, BackgroundColour: &options.RGBA{R: 245, G: 243, B: 237, A: 255}, AssetServer: &assetserver.Options{Assets: frontend.Assets()}, OnStartup: a.Startup, OnBeforeClose: a.BeforeClose, Bind: []interface{}{a}, SingleInstanceLock: &options.SingleInstanceLock{UniqueId: instanceID}, Windows: &windows.Options{WebviewIsTransparent: false}, EnableDefaultContextMenu: true})
+	err = wails.Run(&options.App{Title: "Yantai · 小说写作工作台", Width: 1500, Height: 960, MinWidth: 1050, MinHeight: 700, StartHidden: smoke, BackgroundColour: &options.RGBA{R: 245, G: 243, B: 237, A: 255}, AssetServer: &assetserver.Options{Assets: frontend.Assets()}, OnStartup: a.Startup, OnBeforeClose: a.BeforeClose, Bind: []interface{}{a}, SingleInstanceLock: &options.SingleInstanceLock{UniqueId: instanceID}, Windows: &windows.Options{WebviewIsTransparent: false}, EnableDefaultContextMenu: true})
 	if err != nil {
 		log.Fatal(err)
 	}

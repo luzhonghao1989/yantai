@@ -13,6 +13,6 @@ try {
     if (-not (Test-Path -LiteralPath $wailsPath)) { go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2; if ($LASTEXITCODE -ne 0) { throw 'Wails install failed' } }
     & $wailsPath build -s
     if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed' }
-    go build -o build/bin/NovelEdit-browser.exe ./cmd/server
+    go build -o build/bin/Yantai-browser.exe ./cmd/server
     if ($LASTEXITCODE -ne 0) { throw 'Browser edition build failed' }
 } finally { Pop-Location }

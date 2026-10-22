@@ -62,6 +62,7 @@ export type Storyline = {
 };
 export type Source = { id: string; title: string; text: string; url: string };
 export type AIRun = {
+  inputText?: string;
   id: string;
   chapterId: string;
   mode: string;
@@ -71,6 +72,7 @@ export type AIRun = {
   createdAt: string;
 };
 export type Project = {
+  images?: ProjectImage[];
   schema: number;
   id: string;
   name: string;
@@ -90,6 +92,7 @@ export type Project = {
   sources: Source[];
   aiRuns: AIRun[];
 };
+export type ProjectImage = { id: string; name: string; kind: "map" | "character" | "scene" | "other"; note: string; sha?: string; mime?: string; data?: string; size: number; createdAt: string; sourceRunId?: string };
 export type ProjectInfo = {
   id: string;
   name: string;
@@ -199,7 +202,7 @@ export function apiURL(path: string) {
 }
 export function apiHeaders(json = false): Record<string, string> {
   return {
-    ...(token ? { "X-Novel-Token": token } : {}),
+    ...(token ? { "X-Yantai-Token": token } : {}),
     ...(json ? { "Content-Type": "application/json" } : {}),
   };
 }

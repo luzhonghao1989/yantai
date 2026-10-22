@@ -23,7 +23,7 @@ func TestAgentAtomicUpsert(t *testing.T) {
 		b, _ := json.Marshal(payload)
 		r := httptest.NewRequest(http.MethodPost, "http://localhost/api/projects/"+p.ID+"/agent/apply", bytes.NewReader(b))
 		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("X-Novel-Token", token)
+		r.Header.Set("X-Yantai-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
 		return w

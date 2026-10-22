@@ -33,10 +33,11 @@ func fail(w http.ResponseWriter, err error) {
 	reply(w, status, map[string]string{"error": err.Error()})
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) error {
-	return json.NewDecoder(http.MaxBytesReader(w, r.Body, 24<<20)).Decode(v)
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<20)).Decode(v)
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerImages(mux)
 	s.registerAgent(mux)
 	s.registerModelDiscovery(mux)
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +155,10 @@ func (s *Server) Handler() http.Handler {
 			}
 			data = []byte(b.String())
 		} else {
+			if err := s.Store.hydrateImages(&p); err != nil {
+				fail(w, err)
+				return
+			}
 			data, _ = json.MarshalIndent(p, "", "  ")
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -472,13 +477,17 @@ func (s *Server) Handler() http.Handler {
 			if s.Token != "" {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Novel-Token")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Yantai-Token")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 				if r.Method == "OPTIONS" {
 					w.WriteHeader(204)
 					return
 				}
-				if r.Header.Get("X-Novel-Token") != s.Token {
+				token := r.Header.Get("X-Yantai-Token")
+				if token == "" {
+					token = r.Header.Get("X-Novel-Token")
+				}
+				if token != s.Token {
 					reply(w, 403, map[string]string{"error": "本地会话令牌无效"})
 					return
 				}

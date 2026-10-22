@@ -50,3 +50,6 @@ build/qa*/
 .env.*
 !.env.example
 frontend/package.json.md5
+
+*.syso
+build/previous/

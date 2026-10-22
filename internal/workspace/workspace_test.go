@@ -223,7 +223,7 @@ func TestExportImportAndDesktopToken(t *testing.T) {
 	request := func(method, path string, body io.Reader) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://127.0.0.1:48120"+path, body)
 		r.Header.Set("Origin", "http://wails.localhost")
-		r.Header.Set("X-Novel-Token", "test-session")
+		r.Header.Set("X-Yantai-Token", "test-session")
 		if body != nil {
 			r.Header.Set("Content-Type", "application/json")
 		}
@@ -251,7 +251,7 @@ func TestExportImportAndDesktopToken(t *testing.T) {
 		t.Fatal("desktop api accepted missing session token")
 	}
 	r = httptest.NewRequest("GET", "http://evil.example:48120/api/projects", nil)
-	r.Header.Set("X-Novel-Token", "test-session")
+	r.Header.Set("X-Yantai-Token", "test-session")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
 	if w.Code != 403 {

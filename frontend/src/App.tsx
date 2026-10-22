@@ -1,5 +1,9 @@
 import TextDiff, { docText } from "./TextDiff";
 import LoreImportDialog from "./LoreImportDialog";
+import ImageLibrary from "./ImageLibrary";
+import { parseSceneMap, sceneMapSVG } from "./scene-map";
+import AIRunHistory from "./AIRunHistory";
+import SceneMapPreview from "./SceneMapPreview";
 import { parseCSV } from "./lore-import";
 import {
   useCallback,
@@ -48,6 +52,7 @@ import {
   ShieldCheck,
   Copy,
   Pencil,
+  Images,
 } from "lucide-react";
 import WritingEditor, { type Selection } from "./Editor";
 import {
@@ -72,6 +77,7 @@ import {
   type SearchResult,
   type AIRun,
   type Doc,
+  type ProjectImage,
 } from "./types";
 
 type Page =
@@ -83,7 +89,8 @@ type Page =
   | "item"
   | "location"
   | "inspiration"
-  | "settings";
+  | "settings"
+  | "images";
 type FieldSpec = {
   key: string;
   label: string;
@@ -119,6 +126,7 @@ const nav = [
   { id: "item", name: "物品设定", icon: Package },
   { id: "location", name: "场景设定", icon: MapPin },
   { id: "inspiration", name: "灵感与素材", icon: Sparkles },
+  { id: "images", name: "图片", icon: Images },
 ] as const;
 const kindLabels = { character: "人物", item: "物品", location: "场景" };
 const kindIcons = { character: Users, item: Package, location: MapPin };
@@ -128,6 +136,7 @@ const modeLabels: Record<string, string> = {
   rewrite: "改写",
   review: "AI 审稿",
   ideas: "原创构思",
+  map: "场景平面图",
 };
 const date = (s: string) =>
   new Date(s).toLocaleString("zh-CN", {
@@ -235,7 +244,7 @@ function Modal({
         <button type="button" className="modal-close icon" onClick={close}>
           <X size={20} />
         </button>
-        <div className="eyebrow">砚台 / 工作台</div>
+        <div className="eyebrow">Yantai / 工作台</div>
         <h2>{dialog.title}</h2>
         {dialog.description && <p className="muted">{dialog.description}</p>}
         {dialog.fields.map((f) => (
@@ -317,6 +326,7 @@ export default function App() {
   const [detection, setDetection] = useState<Detection | null>(null),
     [detecting, setDetecting] = useState(false);
   const [instruction, setInstruction] = useState(""),
+    [mapSceneId, setMapSceneId] = useState(""),
     [mode, setMode] = useState("continue"),
     [context, setContext] = useState<ContextPackage | null>(null),
     [contextOpen, setContextOpen] = useState(false),
@@ -489,6 +499,10 @@ export default function App() {
           ...pRef.current,
           revision: p.revision,
           updatedAt: p.updatedAt,
+          images: pRef.current.images?.map(image => {
+            const sent = snapshot.images?.find(i => i.id === image.id), stored = p.images?.find(i => i.id === image.id);
+            return image.data && sent?.data === image.data && stored ? { ...image, data: undefined, sha: stored.sha, mime: stored.mime, size: stored.size } : image;
+          }),
         };
         saved.current = seq;
         setProject(pRef.current);
@@ -554,6 +568,7 @@ export default function App() {
     setContext(null);
     setReview(null);
     setDetection(null);
+    setMapSceneId("");
     selectionRef.current = { from: 0, to: 0, text: "" };
   }, [chapterId, project?.id]);
   const openProject = async (id: string) => {
@@ -786,7 +801,7 @@ export default function App() {
         ? `${project.name}-备份-${new Date().toISOString().replace(/[:.]/g, "-")}.json`
         : project.name + "." + format;
       const completed = await download(await r.blob(), filename);
-      if (completed && format === "json") notify("项目备份已导出，可在另一台电脑的砚台中导入");
+      if (completed && format === "json") notify("项目备份已导出，可在另一台电脑的Yantai中导入");
     } catch (e) {
       notify((e as Error).message);
     }
@@ -860,9 +875,17 @@ export default function App() {
     chapterId,
     revision: pRef.current!.revision,
     mode: taskMode,
-    instruction: instruction || defaultInstruction(taskMode),
+    instruction: (instruction || defaultInstruction(taskMode)) + (taskMode === "map" && mapSceneId ? "\n本次只绘制场景：" + (project?.entities.find(e => e.id === mapSceneId)?.name || "当前场景") : ""),
     selection: selectionRef.current.text,
   });
+  const saveMapToImages = (svg: string, name: string, sourceRunId: string) => {
+    const images = pRef.current?.images || [];
+    if (images.some(i=>i.sourceRunId===sourceRunId)) { notify("这张地图已在图片栏中"); return; }
+    const bytes = new TextEncoder().encode(svg);
+    if (images.length >= 200 || images.reduce((n,i)=>n+i.size,0)+bytes.length>32*1024*1024) { notify("图片栏容量已满，地图仍保存在 AI 历史中，可单独导出"); return; }
+    const image: ProjectImage = { id:uid(),name,kind:"map",note:"AI 生成的场景平面示意，请结合设定核对。",sourceRunId,size:bytes.length,createdAt:new Date().toISOString(),mime:"image/svg+xml",data:"data:image/svg+xml;base64,"+btoa(Array.from(bytes,b=>String.fromCharCode(b)).join("")) };
+    edit(p=>{p.images=[...(p.images||[]),image];});
+  };
   const previewContext = async () => {
     try {
       await flush();
@@ -954,8 +977,13 @@ export default function App() {
                   text: completeText,
                   accepted: false,
                   createdAt: new Date().toISOString(),
+                  inputText: c.text,
                 }),
               );
+            if (taskMode === "map" && pRef.current?.id === p.id) {
+              try { const map = parseSceneMap(completeText); saveMapToImages(sceneMapSVG(map), map.title+".svg", initial.id); } catch { /* The invalid response remains in AI history for review. */ }
+            }
+            await flush();
             break;
           }
         }
@@ -1008,6 +1036,7 @@ export default function App() {
     notify("候选已采纳，可通过撤销或版本历史恢复");
   };
   const runDetection = async () => {
+    if (!config?.detectorUrl?.trim()) { setPage("settings"); notify("请填写独立来源检测服务的完整地址并保存；正文模型地址不能代替检测接口。"); return; }
     setDetecting(true);
     try {
       await flush();
@@ -1146,7 +1175,7 @@ export default function App() {
             <Feather size={23} />
           </span>
           <div>
-            砚台 <small>故事，慢慢写。</small>
+            Yantai <small>故事，慢慢写。</small>
           </div>
         </div>
         <div className="inline">
@@ -1201,7 +1230,7 @@ export default function App() {
               <div className="cover-frame">
                 <span>{b.genre || "长篇小说"}</span>
                 <h2>{b.name}</h2>
-                <div className="cover-seal">砚</div>
+                <div className="cover-seal">Y</div>
                 <small>一个尚在生长的世界</small>
               </div>
             </div>
@@ -1229,13 +1258,13 @@ export default function App() {
         <div className="welcome-note">
           <BookOpen size={20} />
           <div>
-            <b>欢迎来到砚台</b>
+            <b>欢迎来到Yantai</b>
             <p>新建你的小说，或打开示例，体验阶段设定、故事线与写作工作台。</p>
           </div>
         </div>
       )}
       <footer className="shelf-footer">
-        砚台 · 本地小说写作工作台 <span>v0.4.1 / 每次落笔，都有迹可循</span>
+        Yantai · 本地小说写作工作台 <span>v0.4.2 / 每次落笔，都有迹可循</span>
       </footer>
     </div>
   );
@@ -2391,8 +2420,10 @@ export default function App() {
           <option value="rewrite">改写 · 选区或整章</option>
           <option value="ideas">原创构思 · 不改正文</option>
           <option value="review">AI 审稿 · 不改正文</option>
+          <option value="map">地图绘制 · 场景平面图</option>
         </select>
       </Field>
+      {mode === "map" && <Field label="绘制场景"><select aria-label="绘制场景" value={mapSceneId} onChange={e=>setMapSceneId(e.target.value)}><option value="">综合本章有效场景</option>{project && chapter && boundEntities(project,chapter).filter(e=>e.kind==="location").map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select><small className="muted">用当前文字模型绘制房间、地点及道路连接，可在下方说明中指定布局。地图单独保存，不修改正文。</small></Field>}
       <Field label="这次想怎么写？">
         <textarea
           rows={4}
@@ -2446,11 +2477,12 @@ export default function App() {
             </span>
           </div>
           {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} />}
-          <div className="candidate-text">
+          {candidate.mode === "map" && candidate.complete && <SceneMapPreview text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
+          <div className="candidate-text" hidden={candidate.mode === "map" && candidate.complete}>
             {candidate.text || <span className="muted">等待模型响应……</span>}
           </div>
           <div className="candidate-actions">
-            {!["review", "ideas"].includes(candidate.mode) && (
+            {!["review", "ideas", "map"].includes(candidate.mode) && (
               <Button
                 disabled={!candidate.complete || generating}
                 onClick={acceptCandidate}
@@ -2471,9 +2503,10 @@ export default function App() {
               <Copy size={14} /> 复制
             </Button>
           </div>
-          <small>候选不会自动改正文。采纳前会检查正文是否已变化。</small>
+          <small>{["review","map"].includes(candidate.mode) ? "完成的结果自动保存到项目，可在下方历史列表或审稿栏重新查看。" : "候选不会自动改正文。采纳前会检查正文是否已变化。"}</small>
         </div>
       )}
+      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} onSave={saveMapToImages} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
       {!candidate && (
         <div className="small-empty">
           <Sparkles size={27} />
@@ -2555,6 +2588,7 @@ export default function App() {
           placeholder="命运的齿轮\n不禁陷入了沉思"
         />
       </div>
+      {project && chapter && <AIRunHistory key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} reviewsOnly onDownload={()=>{}} />}
       <div className="review-section">
         <h4>AI 使用记录与来源检测</h4>
         <p>
@@ -2574,15 +2608,16 @@ export default function App() {
         <Button
           secondary
           disabled={detecting || !chapter}
-          onClick={runDetection}
+          onClick={config?.detectorUrl?.trim() ? runDetection : () => setPage("settings")}
         >
           {detecting ? (
             <Loader2 className="spin" size={14} />
           ) : (
             <ShieldCheck size={14} />
           )}{" "}
-          请求来源检测
+          {config?.detectorUrl?.trim() ? "请求来源检测" : "配置来源检测服务"}
         </Button>
+        {!config?.detectorUrl?.trim() && <p className="info-note">尚未配置独立来源检测服务。点击上方按钮填写完整检测接口地址与密钥并保存；聊天模型用于审稿，不能返回可靠的作者身份判定。AI 审稿和本地检查仍可正常使用。</p>}
         {detection && (
           <div className="info-note">
             <b>{detection.model}</b>
@@ -2645,7 +2680,7 @@ export default function App() {
       {loading ? (
         <div className="startup">
           <Feather size={40} />
-          <h2>砚台</h2>
+          <h2>Yantai</h2>
           <Loader2 className="spin" size={22} />
         </div>
       ) : shelf || !project ? (
@@ -2658,7 +2693,7 @@ export default function App() {
                 <Feather size={22} />
               </span>
               <div>
-                砚台 <small>小说写作工作台</small>
+                Yantai <small>小说写作工作台</small>
               </div>
             </div>
             <button className="project-switch" onClick={goShelf}>
@@ -2773,7 +2808,7 @@ export default function App() {
                 <Library size={17} /> 返回书架
               </button>
               <div className="local-indicator">
-                <span className="status-dot" /> 本地工作空间 <span>v0.4.1</span>
+                <span className="status-dot" /> 本地工作空间 <span>v0.4.2</span>
               </div>
             </div>
           </aside>
@@ -2992,6 +3027,8 @@ export default function App() {
               renderInspiration()
             ) : page === "settings" ? (
               renderSettings()
+            ) : page === "images" ? (
+              <ImageLibrary key={project.id} project={project} edit={edit} notify={notify} onDownload={download} />
             ) : (
               renderLore()
             )}
@@ -3142,7 +3179,7 @@ async function download(blob: Blob, name: string) {
       };
     };
   };
-  if (w.go?.main?.App?.SaveBinary && /\.(docx|epub)$/i.test(name)) {
+  if (w.go?.main?.App?.SaveBinary && /\.(docx|epub|png|jpe?g|gif)$/i.test(name)) {
     const encoded = await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]);reader.onerror=()=>reject(Error("读取导出文件失败"));reader.readAsDataURL(blob);});
     return !!(await w.go.main.App.SaveBinary(name,encoded));
   }
@@ -3183,6 +3220,8 @@ function defaultInstruction(mode: string) {
         ? "改写选中段落；若未选中则改写本章，保持剧情与人设。"
         : mode === "review"
           ? "审查当前章的文风与设定连续性，引用原文并给出具体改法。"
+          : mode === "map"
+            ? "依据本章当前阶段有效场景绘制平面图，列出房间、地点与道路连接，未知方位在备注中说明为示意；只返回约定的地图 JSON。"
           : "根据当前细纲与设定提出三种原创场景方案。";
 }
 

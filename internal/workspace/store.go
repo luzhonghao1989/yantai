@@ -100,6 +100,9 @@ func (s *Store) Save(p Project) (Project, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.prepareImages(&p); err != nil {
+		return p, err
+	}
 	db, err := s.db(p.ID, false)
 	if err != nil {
 		return p, err

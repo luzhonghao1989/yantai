@@ -1,17 +1,17 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "NovelEdit",
-  "outputfilename": "NovelEdit",
+  "name": "Yantai",
+  "outputfilename": "Yantai",
   "frontend:install": "npm.cmd install",
   "frontend:build": "npm.cmd run build",
   "frontend:dev:watcher": "npm.cmd run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "NovelEdit",
+    "name": "Yantai",
     "email": ""
   },
   "info": {
-    "productName": "砚台",
-    "productVersion": "0.4.1"
+    "productName": "Yantai",
+    "productVersion": "0.4.2"
   }
 }

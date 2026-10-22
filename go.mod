@@ -1,4 +1,4 @@
-module novel_edit
+module yantai
 
 go 1.23.0
 

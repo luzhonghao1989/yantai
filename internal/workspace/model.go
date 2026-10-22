@@ -72,6 +72,7 @@ type Source struct {
 	URL   string `json:"url"`
 }
 type AIRun struct {
+	InputText string `json:"inputText,omitempty"`
 	ID        string `json:"id"`
 	ChapterID string `json:"chapterId"`
 	Mode      string `json:"mode"`
@@ -81,24 +82,25 @@ type AIRun struct {
 	CreatedAt string `json:"createdAt"`
 }
 type Project struct {
-	Schema      int         `json:"schema"`
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Genre       string      `json:"genre"`
-	Description string      `json:"description"`
-	Outline     string      `json:"outline"`
-	Rules       string      `json:"rules"`
-	Style       string      `json:"style"`
-	Banned      string      `json:"banned"`
-	Revision    int64       `json:"revision"`
-	UpdatedAt   string      `json:"updatedAt"`
-	Volumes     []Volume    `json:"volumes"`
-	Stages      []Stage     `json:"stages"`
-	Chapters    []Chapter   `json:"chapters"`
-	Entities    []Entity    `json:"entities"`
-	Storylines  []Storyline `json:"storylines"`
-	Sources     []Source    `json:"sources"`
-	AIRuns      []AIRun     `json:"aiRuns"`
+	Images      []ProjectImage `json:"images,omitempty"`
+	Schema      int            `json:"schema"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Genre       string         `json:"genre"`
+	Description string         `json:"description"`
+	Outline     string         `json:"outline"`
+	Rules       string         `json:"rules"`
+	Style       string         `json:"style"`
+	Banned      string         `json:"banned"`
+	Revision    int64          `json:"revision"`
+	UpdatedAt   string         `json:"updatedAt"`
+	Volumes     []Volume       `json:"volumes"`
+	Stages      []Stage        `json:"stages"`
+	Chapters    []Chapter      `json:"chapters"`
+	Entities    []Entity       `json:"entities"`
+	Storylines  []Storyline    `json:"storylines"`
+	Sources     []Source       `json:"sources"`
+	AIRuns      []AIRun        `json:"aiRuns"`
 }
 
 func ID() string {
@@ -152,6 +154,9 @@ func NewProject(name string, demo bool) Project {
 	return p
 }
 func Validate(p Project) error {
+	if err := validateImages(p.Images); err != nil {
+		return err
+	}
 	if len(p.Volumes) == 0 || len(p.Stages) == 0 {
 		return errors.New("项目至少需要一个卷和一个阶段")
 	}

@@ -1,8 +1,8 @@
 # AI Agent 写入接口
 
-启动桌面版后，程序会在 `build/bin/data/agent-connection.json` 写入当前连接信息：`base` 是本机地址，`token` 是会话令牌。若设置 `NOVEL_EDIT_DATA`，文件在对应数据目录。退出时移除文件，每次启动令牌和端口都会变化。Agent 只需读这个本机文件，不需要操作界面或数据库。不要提交或分享这个文件。
+启动桌面版后，程序会在 `build/bin/data/agent-connection.json` 写入当前连接信息：`base` 是本机地址，`token` 是会话令牌。若设置 `YANTAI_DATA`，文件在对应数据目录。退出时移除文件，每次启动令牌和端口都会变化。Agent 只需读这个本机文件，不需要操作界面或数据库。不要提交或分享这个文件。
 
-所有桌面请求携带 `X-Novel-Token`，写请求还需 `Content-Type: application/json`。仅支持本机访问，请求体上限 24 MiB。浏览器独立版地址默认是 `http://127.0.0.1:48120`，不要求桌面令牌；不要同时用两个程序打开同一数据目录。
+所有桌面请求携带 `X-Yantai-Token`，写请求还需 `Content-Type: application/json`。仅支持本机访问，请求体上限 64 MiB。浏览器独立版地址默认是 `http://127.0.0.1:48120`，不要求桌面令牌；不要同时用两个程序打开同一数据目录。
 
 ## 接口列表
 
@@ -62,7 +62,7 @@ def request(path, payload=None):
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = Request(connection["base"] + "/api" + path, data=data, headers={
         "Content-Type": "application/json",
-        "X-Novel-Token": connection["token"],
+        "X-Yantai-Token": connection["token"],
     })
     with urlopen(req) as response:
         return json.load(response)
@@ -98,3 +98,15 @@ print("保存成功，版本：", saved["revision"])
 正文工具栏「去除空白行」仅处理当前编辑章节，保留非空行的文本、字体与强调格式，可用 Ctrl+Z 一次撤销，之后沿用自动保存。导入和 Agent 写入不会自动删除空行；本次未增加服务端清理接口。需要保留富文本的 Agent 操作应使用完整项目 PUT，不能用 text 重建代替无损格式编辑。
 
 正文修改标记存于 chapters[].content 的内联 marks：type=revisionNote，attrs 包含 id（字符串）、note（说明）、resolved（布尔值）。同一标记可能因格式或编辑分成多个片段，需按 id 处理。只更新章纲等资料时省略 text/content 即可保留；提交 text 会重新生成富文本并清除标记和字体格式，保留标记的正文编辑应读取最新完整项目后使用 PUT，并保留既有 marks。JSON 备份携带标记；文稿导出不包含修改说明。
+
+生成接口新增 mode=map：同样提交当前 revision、chapterId、instruction，使用当前阶段上下文，流式结果为场景平面图 JSON（title、note、nodes、edges）。nodes 的 id 唯一，kind 为 room/place，x/y 范围 0—100；edges 以 from/to 引用节点，可含 label 与 uncertain。前端校验后用固定模板绘制 SVG，不执行模型返回的 HTML/SVG。
+
+AI 使用记录新增可选 inputText（生成时的正文快照）；旧记录仍兼容。界面会自动将完成的审稿和地图加入 aiRuns 并保存。直接使用 /generate 的 Agent 需自行保存结果；该流式接口不会替 Agent 写项目。aiRuns 不属于 agent/apply 的可写集合，需要写入记录时先读取完整项目并按 revision 使用完整 PUT，保留已有所有记录。
+
+## v0.4.2 图片与品牌名称
+
+规范认证头为 X-Yantai-Token，旧头仍兼容；连接文件名与结构保持 agent-connection.json。数据目录变量为 YANTAI_DATA，应用及二进制名称统一为 Yantai。
+
+Project 新增可选 images 数组。每项包含 id、name、kind（map/character/scene/other）、note、sha、mime、size、createdAt，以及可选 sourceRunId（AI 地图来源记录）。导入新图时提供 data（base64 Data URL），使用最新 revision 完整 PUT；服务器验证后将原文件独立存储，返回 sha/mime/size 并移除 data。普通 GET 不携带图片字节。图片不属于 agent/apply 的集合；普通资料同步保持 images 原样。
+
+GET /api/projects/{id}/images/{imageId} 返回原图，需要同样的本机会话认证。完整 JSON 导出会为每张图补齐 data，/api/import 在目标电脑恢复原图。图片随 data 目录移走即可保留；不要只复制 novel.db。单张最大 8 MiB，每项目最大 200 张及 32 MiB；JSON 请求上限更新为 64 MiB。

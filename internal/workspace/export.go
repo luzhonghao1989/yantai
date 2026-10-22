@@ -206,7 +206,7 @@ func ExportEPUB(p Project) ([]byte, error) {
 	if err := add("EPUB/nav.xhtml", `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="zh-CN"><head><title>目录</title></head><body><nav epub:type="toc" id="toc"><h1>`+xmlText(p.Name)+`</h1><ol>`+nav.String()+`</ol></nav></body></html>`); err != nil {
 		return nil, err
 	}
-	if err := add("EPUB/package.opf", `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:novel-edit:`+xmlText(p.ID)+`</dc:identifier><dc:title>`+xmlText(p.Name)+`</dc:title><dc:language>zh-CN</dc:language><meta property="dcterms:modified">`+Now()+`</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="style.css" media-type="text/css"/>`+manifest.String()+`</manifest><spine>`+spine.String()+`</spine></package>`); err != nil {
+	if err := add("EPUB/package.opf", `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:yantai:`+xmlText(p.ID)+`</dc:identifier><dc:title>`+xmlText(p.Name)+`</dc:title><dc:language>zh-CN</dc:language><meta property="dcterms:modified">`+Now()+`</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="style.css" media-type="text/css"/>`+manifest.String()+`</manifest><spine>`+spine.String()+`</spine></package>`); err != nil {
 		return nil, err
 	}
 	if err := z.Close(); err != nil {

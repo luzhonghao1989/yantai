@@ -4,8 +4,8 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	"novel_edit/frontend"
-	"novel_edit/internal/workspace"
+	"yantai/frontend"
+	"yantai/internal/workspace"
 	"time"
 )
 
@@ -18,7 +18,7 @@ func main() {
 		log.Fatal(err)
 	}
 	server := &workspace.Server{Store: store, Assets: frontend.Assets()}
-	log.Printf("砚台已启动：http://%s", *address)
+	log.Printf("Yantai已启动：http://%s", *address)
 	httpServer := &http.Server{Addr: *address, Handler: server.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(httpServer.ListenAndServe())
 }
