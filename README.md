@@ -1,6 +1,6 @@
-# Yantai小说写作工作台
+# Yantai 小说写作工作台
 
-Yantai是一款本地优先的中文小说写作桌面软件，使用 Go + Wails + React + Tiptap + SQLite，提供正文、大纲、细纲、故事线、分阶段设定、AI 辅助、审稿与素材检索。
+Yantai 是一款本地优先的中文小说写作桌面软件，使用 Go + Wails + React + Tiptap + SQLite，提供正文、大纲、细纲、故事线、分阶段设定、AI 辅助、审稿与素材检索。
 
 当前版本为 v0.4.2，优先支持 Windows。发布程序内嵌前端资源，使用时不需要 Node.js、Go 或单独安装数据库；Windows 需要 WebView2，本地 AI 需要另行启动模型服务。
 
