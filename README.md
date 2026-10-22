@@ -6,9 +6,9 @@
 
 ## 启动
 
-双击 [NovelEdit.exe](build/bin/NovelEdit.exe)。书架提供新建小说与示例小说入口。默认数据存放在 build/bin/data，移动程序时请保留旁边的 data 目录。可通过 NOVEL_EDIT_DATA 环境变量指定数据目录。
+双击 [Yantai.exe](build/bin/Yantai.exe)。书架提供新建小说与示例小说入口。默认数据存放在 build/bin/data，移动程序时请保留旁边的 data 目录。可通过 NOVEL_EDIT_DATA 环境变量指定数据目录。
 
-另提供 build/bin/NovelEdit-browser.exe，运行 scripts/browser.ps1 后在浏览器中使用。桌面版与浏览器版默认可指向同一数据目录，多个客户端的旧版本写入会被拒绝。
+另提供 build/bin/Yantai-browser.exe，运行 scripts/browser.ps1 后在浏览器中使用。桌面版与浏览器版默认可指向同一数据目录，多个客户端的旧版本写入会被拒绝。
 
 ## 已实现
 
