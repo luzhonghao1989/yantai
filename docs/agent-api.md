@@ -101,7 +101,24 @@ print("保存成功，版本：", saved["revision"])
 
 生成接口新增 mode=map：同样提交当前 revision、chapterId、instruction，使用当前阶段上下文，流式结果为场景平面图 JSON（title、note、nodes、edges）。nodes 的 id 唯一，kind 为 room/place，x/y 范围 0—100；edges 以 from/to 引用节点，可含 label 与 uncertain。前端校验后用固定模板绘制 SVG，不执行模型返回的 HTML/SVG。
 
+生成接口支持 mode=revision：instruction 中传入待修改标记的 id、quote（原文）、note（修改意见）及补充要求，返回 `{"replacements":[{"id":"标记ID","text":"修改后正文"}]}`。该接口只生成候选，不直接修改项目。软件界面会校验每个请求 ID 恰好出现一次、改文非空，核对生成时的正文和上下文，再按文档位置逆序替换各标记范围并将标记设为已处理；未勾选范围保持原样。
+
+ComfyUI 生图使用独立接口，均沿用本机会话认证：
+
+- 设置 `comfy`：baseUrl、workflow（API 格式 JSON 字符串）、positiveNode/positiveInput、negativeNode/negativeInput（可选）、outputNode（可选）、apiKey/hasKey。公开设置不返回密钥；hasKey=true 且 apiKey 留空时保留已有值。其余模型配置必须读改写保留。
+- `POST /api/comfyui/test`：验证已保存配置并请求 `/system_stats`；不提交生图。
+- `POST /api/projects/{id}/scene-prompt`：提交 `{chapterId,revision,instruction?,entityId?}`。instruction 是可选的画面要求，entityId 为本章当前有效场景的 ID（可省略自动选景）。文字模型读取完整章节上下文，返回 `{title,description,prompt,negativePrompt}`；校验 revision、非空正文、有效场景与模型上下文预算，失败不会请求 ComfyUI。
+- `POST /api/comfyui/jobs`：`{"prompt":"画面描述","negative":"不希望出现的内容","seed":123}`，seed 可省略；返回 202 和 `{id,seed}`。ID 是 Yantai 本进程内的任务 ID，不是 ComfyUI prompt_id；重启后可在 ComfyUI 查看原任务。
+- `GET /api/comfyui/jobs/{id}`：返回 `{status:"waiting",seed}` 或 `{status:"completed",seed,images:[ProjectImage...]}`。每张图片携带可保存的 DataURL、MIME、大小及 sourceRunId。上游失败、无图片或图片超限时返回明确错误。
+- 生图接口不直接修改项目。界面会将结果去重添加到当前项目的 images 并通过完整 PUT 保存；Agent 调用时需保留所有已有项目数据、检查 revision 冲突，完成相同保存步骤。
+
+界面的一键章节生图流程为：保存当前稿 → 调用 scene-prompt → 核对正文和上下文未变化 → 将生成的 prompt/negativePrompt 自动提交 comfyui/jobs → 轮询完成 → 保存图片。图片备注包含来源章节、选景依据、正负向提示词与种子，随项目备份保留。
+
+接入方式参考 [ComfyUI 官方 HTTP API 示例](https://github.com/Comfy-Org/ComfyUI/blob/master/script_examples/websockets_api_example.py)：提交 `/prompt`，查询指定任务 `/history/{prompt_id}`，按图片元数据从 `/view` 取回文件。服务端代理这些请求，浏览器不直接携带 ComfyUI 访问密钥。
+
 AI 使用记录新增可选 inputText（生成时的正文快照）；旧记录仍兼容。界面会自动将完成的审稿和地图加入 aiRuns 并保存。直接使用 /generate 的 Agent 需自行保存结果；该流式接口不会替 Agent 写项目。aiRuns 不属于 agent/apply 的可写集合，需要写入记录时先读取完整项目并按 revision 使用完整 PUT，保留已有所有记录。
+
+审稿 mode=review 的新提示词要求返回 JSON 文本：`{summary,suggestions:[{paragraph,original,replacement,reason}]}`。summary 是可排版的审稿总结，original 是逐字引用的单个完整段落，replacement 是可直接替换的改文；无确定改法时 suggestions 可为空。界面兼容历史普通文本审稿；只对当前文档中唯一匹配的完整原段落启用替换，段落序号仅作展示，不能用过期序号猜测相同段落的位置。保存记录的字段结构仍为 AIRun.text 字符串，不迁移历史数据。
 
 ## v0.4.2 图片与品牌名称
 
@@ -110,3 +127,5 @@ AI 使用记录新增可选 inputText（生成时的正文快照）；旧记录�
 Project 新增可选 images 数组。每项包含 id、name、kind（map/character/scene/other）、note、sha、mime、size、createdAt，以及可选 sourceRunId（AI 地图来源记录）。导入新图时提供 data（base64 Data URL），使用最新 revision 完整 PUT；服务器验证后将原文件独立存储，返回 sha/mime/size 并移除 data。普通 GET 不携带图片字节。图片不属于 agent/apply 的集合；普通资料同步保持 images 原样。
 
 GET /api/projects/{id}/images/{imageId} 返回原图，需要同样的本机会话认证。完整 JSON 导出会为每张图补齐 data，/api/import 在目标电脑恢复原图。图片随 data 目录移走即可保留；不要只复制 novel.db。单张最大 8 MiB，每项目最大 200 张及 32 MiB；JSON 请求上限更新为 64 MiB。
+
+生成流新增可选 SSE 事件 `{"type":"thinking","data":"模型返回的思考文本增量"}`。它是临时生成进度，正式内容仍使用 delta，done.data.text 只含正式答案；调用方可忽略 thinking，勿将它拼进正文或 aiRuns.text。Generate 的非流式消费者也会剥离模型内嵌 think/thinking 内容，避免干扰 JSON 解析。

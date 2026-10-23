@@ -103,6 +103,7 @@ export type ProjectInfo = {
   chapters: number;
 };
 export type Config = {
+  comfy?: ComfyConfig;
   embeddingModel?: string;
   provider: string;
   baseUrl: string;
@@ -117,6 +118,10 @@ export type Config = {
   detectorUrl: string;
   detectorKey: string;
   hasDetectorKey: boolean;
+};
+export type ComfyConfig = {
+  baseUrl: string; apiKey: string; hasKey: boolean; workflow: string;
+  positiveNode: string; positiveInput: string; negativeNode: string; negativeInput: string; outputNode: string;
 };
 export type Detection = {
   score: number | null;

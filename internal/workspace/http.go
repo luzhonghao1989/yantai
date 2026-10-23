@@ -38,6 +38,8 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerImages(mux)
+	s.registerComfy(mux)
+	s.registerScenePrompt(mux)
 	s.registerAgent(mux)
 	s.registerModelDiscovery(mux)
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +294,7 @@ func (s *Server) Handler() http.Handler {
 			return err
 		}
 		send("context", cp)
-		text, err := Generate(r.Context(), cfg, cp, in.Mode, func(part string) error { return send("delta", part) })
+		text, err := GenerateWithThinking(r.Context(), cfg, cp, in.Mode, func(part string) error { return send("delta", part) }, func(part string) error { return send("thinking", part) })
 		if err != nil {
 			send("error", err.Error())
 			return

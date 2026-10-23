@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import {getSchema} from '../frontend/node_modules/@tiptap/core/dist/index.js';
+import StarterKit from '../frontend/node_modules/@tiptap/starter-kit/dist/index.js';
+import {EditorState} from '../frontend/node_modules/prosemirror-state/dist/index.js';
+import {history,closeHistory,undo} from '../frontend/node_modules/prosemirror-history/dist/index.js';
+import {RevisionNote,revisionNotes} from '../frontend/src/revision-notes.ts';
+import {revisionTasks,revisionInstruction,parseRevisionReplacements,applyRevisionReplacements,canAcceptRevision,revisionHasChange,remainingRevisionTasks} from '../frontend/src/revision-ai.ts';
+const schema=getSchema([StarterKit,RevisionNote]);
+const mark=(id,note,resolved=false)=>schema.mark('revisionNote',{id,note,resolved});
+const para=(...content)=>schema.node('paragraph',null,content);
+const text=(s,marks=[])=>schema.text(s,marks);
+const original=schema.node('doc',null,[
+  para(text('前文。'),text('她说你好。',[schema.mark('bold'),mark('a','对白更含蓄')]),text('中间保持原样。',[schema.mark('italic')]),text('他走了。',[mark('b','补充一个动作')]),text('末尾。')),
+  para(text('旧标记。',[mark('done','已处理',true)])),
+]);
+let state=EditorState.create({schema,doc:original,plugins:[history()]});
+const tasks=revisionTasks(state.doc);
+assert.equal(tasks.length,2);
+assert.equal(revisionTasks(state.doc,['a']).length,1);
+assert(revisionInstruction(tasks).includes('对白更含蓄'));
+assert(revisionInstruction(tasks).includes('她说你好。'));
+assert(revisionInstruction(tasks).includes('严禁把quote原样复制'));
+const echoed = tasks.map(t=>({id:t.id,text:t.quote}));
+assert(!canAcceptRevision(JSON.stringify({replacements:echoed}),tasks));
+assert.throws(()=>applyRevisionReplacements(state,tasks,echoed),/未实际修改/);
+assert(state.doc.eq(original));
+assert(!revisionHasChange('她说你好。','  她说你好。\n'));
+const partial = state.apply(applyRevisionReplacements(state,tasks,[echoed[0],{id:'b',text:'他转身走了。'}]));
+assert.equal(revisionNotes(partial.doc).find(n=>n.id==='a').resolved,false);
+assert.equal(revisionNotes(partial.doc).find(n=>n.id==='b').resolved,true);
+assert(partial.doc.textContent.includes('她说你好。中间保持原样。他转身走了。'));
+const result={replacements:[{id:'b',text:'他抬手拂去雨水，转身离开。'},{id:'a',text:'她看了他一眼：“来了？”'}]};
+const parsed=parseRevisionReplacements('```json\n'+JSON.stringify(result)+'\n```',tasks);
+assert.equal(parsed[0].id,'a');
+// Accept one mark, then accept another after positions have shifted.
+let sequential=state.apply(applyRevisionReplacements(state,[tasks[0]],[parsed[0]]));
+const remaining=remainingRevisionTasks(sequential.doc,tasks);
+assert.equal(remaining.length,1);assert.equal(remaining[0].id,'b');assert.notEqual(remaining[0].from,tasks[1].from);
+sequential=sequential.apply(applyRevisionReplacements(sequential,remaining,[parsed[1]]));
+assert(revisionNotes(sequential.doc).filter(n=>['a','b'].includes(n.id)).every(n=>n.resolved));
+assert(!canAcceptRevision(JSON.stringify(result),tasks,['a','b']));
+state=state.apply(applyRevisionReplacements(state,tasks,parsed));
+state=state.apply(closeHistory(state.tr));
+assert.equal(state.doc.textContent,'前文。她看了他一眼：“来了？”中间保持原样。他抬手拂去雨水，转身离开。末尾。旧标记。');
+assert(revisionNotes(state.doc).every(n=>n.resolved));
+state.doc.descendants(n=>{if(n.text==='中间保持原样。')assert(n.marks.some(m=>m.type.name==='italic'));if(n.text?.startsWith('她看了'))assert(n.marks.some(m=>m.type.name==='bold'));});
+assert(undo(state,tr=>state=state.apply(tr)));assert(state.doc.eq(original));
+const stale=state.apply(state.tr.insertText('新增',1));
+assert.throws(()=>applyRevisionReplacements(stale,tasks,parsed),/已变化/);
+for(const replacements of [[],[{id:'a',text:'x'},{id:'a',text:'y'}],[{id:'x',text:'x'},{id:'b',text:'y'}],[{id:'a',text:' '},{id:'b',text:'y'}]])assert.throws(()=>parseRevisionReplacements(JSON.stringify({replacements}),tasks));
+assert.throws(()=>parseRevisionReplacements('普通正文',tasks));
+assert.throws(()=>revisionTasks(schema.node('doc',null,[para(text('内容',[mark('x','')]))])),/修改意见/);
+assert.throws(()=>revisionTasks(schema.node('doc',null,[para(text('开头',[mark('x','意见')]),text('不应被改'),text('结尾',[mark('x','意见')]))])),/不连续/);
+// Cross-paragraph selections retain surrounding prose and insert multiple paragraphs.
+const cross=schema.node('doc',null,[para(text('前。'),text('第一段',[mark('m','跨段改写')])),para(text('第二段',[mark('m','跨段改写')]),text('后。'))]);
+let multi=EditorState.create({schema,doc:cross});
+const mt=revisionTasks(cross);assert.equal(mt[0].quote,'第一段\n第二段');
+multi=multi.apply(applyRevisionReplacements(multi,mt,[{id:'m',text:'新一段\n新二段'}]));
+assert.equal(multi.doc.textBetween(0,multi.doc.content.size,'\n'),'前。新一段\n新二段后。');
+console.log('AI marked revision: scoped replacements, excluded/resolved notes, validation, multiline quotes, preserved prose/formatting, stale guard and one-step undo passed');

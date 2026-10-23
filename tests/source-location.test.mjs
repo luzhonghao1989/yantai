@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {getSchema} from '../frontend/node_modules/@tiptap/core/dist/index.js';
+import StarterKit from '../frontend/node_modules/@tiptap/starter-kit/dist/index.js';
+import {EditorState} from '../frontend/node_modules/prosemirror-state/dist/index.js';
+import {RevisionNote} from '../frontend/src/revision-notes.ts';
+import {sourceMatches,nextSourceMatch} from '../frontend/src/source-location.ts';
+const schema=getSchema([StarterKit,RevisionNote]);
+const text=(s,marks=[])=>schema.text(s,marks);
+const p=(...content)=>schema.node('paragraph',null,content);
+const mark=schema.mark('revisionNote',{id:'target',note:'改写',resolved:false});
+const doc=schema.node('doc',null,[p(text('她'),text('抬眼',[schema.mark('bold')]),text('😀。')),p(),p(text('相同段落。')),schema.node('blockquote',null,[p(text('相同段落。',[mark]))]),p(text('雨停'),schema.node('hardBreak'),text('灯亮。'))]);
+const original=doc.toJSON();
+for(const quote of ['她抬眼😀。','抬眼😀','相同段落。','雨停\n灯亮。','相同段落。\n雨停\n灯亮。','她抬眼😀。\n\n相同段落。']){
+  const matches=sourceMatches(doc,quote);assert(matches.length,quote);
+  for(const m of matches)assert.equal(doc.textBetween(m.from,m.to,'\n','\n'),quote);
+}
+assert.equal(sourceMatches(doc,'相同段落。').length,2);
+const marked=sourceMatches(doc,'相同段落。',{markId:'target'});
+assert.equal(marked.length,1);assert.deepEqual(marked[0],sourceMatches(doc,'相同段落。')[1]);
+assert.deepEqual(sourceMatches(doc,'原文已变',{markId:'target'}),[]);
+assert.deepEqual(sourceMatches(doc,'相同段落。',{markId:'deleted'}),[]);
+assert.equal(sourceMatches(doc,'相同段落。',{paragraph:4})[0].from,marked[0].from);
+assert.equal(sourceMatches(doc,'相同段落。',{paragraph:999}).length,2);
+assert.deepEqual(sourceMatches(doc,'不存在'),[]);assert.deepEqual(sourceMatches(doc,' \n '),[]);
+const repeated=sourceMatches(doc,'相同段落。');
+assert.equal(nextSourceMatch(repeated,{from:0,to:0}),0);
+assert.equal(nextSourceMatch(repeated,repeated[0]),1);assert.equal(nextSourceMatch(repeated,repeated[1]),0);
+const state=EditorState.create({schema,doc});
+const moved=state.apply(state.tr.insertText('新增前文',1)).doc;
+assert.equal(sourceMatches(moved,'相同段落。',{markId:'target'})[0].from,marked[0].from+4);
+assert.deepEqual(doc.toJSON(),original,'Navigation must not modify the manuscript');
+console.log('Source navigation: formatting, emoji, hard breaks, empty/nested paragraphs, duplicate cycling, mark anchors, stale rejection and current positions passed');

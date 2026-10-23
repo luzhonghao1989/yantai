@@ -1,8 +1,19 @@
+import { sourceMatches, nextSourceMatch, type LocateSource } from "./source-location";
+import AIProgress, { type GenerationProgress } from "./AIProgress";
 import TextDiff, { docText } from "./TextDiff";
 import LoreImportDialog from "./LoreImportDialog";
 import ImageLibrary from "./ImageLibrary";
 import { parseSceneMap, sceneMapSVG } from "./scene-map";
 import AIRunHistory from "./AIRunHistory";
+import AIContent from "./AIContent";
+import ReviewResult from "./ReviewResult";
+import { replaceReviewParagraph,reviewRetryInstruction,type ReviewSuggestion } from "./review-replacements";
+import ComfySettings from "./ComfySettings";
+import ComfyImagePanel from "./ComfyImagePanel";
+import RevisionCandidate from "./RevisionCandidate";
+import { revisionNotes, type RevisionNoteEntry } from "./revision-notes";
+import { revisionTasks, revisionInstruction, parseRevisionReplacements, applyRevisionReplacements, revisionHasChange, canAcceptRevision, remainingRevisionTasks } from "./revision-ai";
+import { closeHistory } from "@tiptap/pm/history";
 import SceneMapPreview from "./SceneMapPreview";
 import { parseCSV } from "./lore-import";
 import {
@@ -106,6 +117,9 @@ type Dialog = {
   button?: string;
 };
 type Candidate = {
+  revisionSignatures?:string[];
+  retrying?: boolean;
+  revisionTasks?: RevisionNoteEntry[];
   contextSignature: string;
   text: string;
   mode: string;
@@ -134,9 +148,11 @@ const modeLabels: Record<string, string> = {
   continue: "续写",
   expand: "扩写",
   rewrite: "改写",
+  revision: "按标记修改",
   review: "AI 审稿",
   ideas: "原创构思",
-  map: "场景平面图",
+  map: "场景平面图（SVG）",
+  comfyui: "场景绘制（ComfyUI）",
 };
 const date = (s: string) =>
   new Date(s).toLocaleString("zh-CN", {
@@ -336,6 +352,9 @@ export default function App() {
     [results, setResults] = useState<SearchResult[]>([]),
     [searching, setSearching] = useState(false);
   const [loreImport, setLoreImport] = useState<{rows: Record<string,string>[]; stageId:string} | null>(null);
+  const [aiProgress,setAIProgress]=useState<GenerationProgress|null>(null);
+  const [revisionExcluded, setRevisionExcluded] = useState<string[]>([]);
+  const [, signalEditorReady] = useState(0);
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
   const [styleAnalysis, setStyleAnalysis] = useState("");
   const [inspirationMode, setInspirationMode] = useState("keyword-local");
@@ -564,11 +583,13 @@ export default function App() {
     setSearching(false);
     abortRef.current?.abort();
     setGenerating(false);
+    setAIProgress(null);
     setCandidate(null);
     setContext(null);
     setReview(null);
     setDetection(null);
     setMapSceneId("");
+    setRevisionExcluded([]);
     selectionRef.current = { from: 0, to: 0, text: "" };
   }, [chapterId, project?.id]);
   const openProject = async (id: string) => {
@@ -640,7 +661,7 @@ export default function App() {
       if (c) Object.assign(c, values);
     });
   const ready = useCallback((e: Editor) => {
-    editorRef.current = e;
+    if(editorRef.current!==e){editorRef.current=e;signalEditorReady(n=>n+1);}
   }, []);
   const addChapter = (volumeId: string) =>
     setDialog({
@@ -871,12 +892,18 @@ export default function App() {
     }});
     setLoreImport(null);notify(`已导入 ${added} 条设定，跳过 ${rows.length-added} 条同名记录`);
   };
-  const aiInput = (taskMode = mode) => ({
+  const currentRevisionTasks = () => {
+    if (!editorRef.current) throw Error("请先打开正文编辑器。");
+    return revisionTasks(editorRef.current.state.doc, revisionExcluded);
+  };
+  const aiInput = (taskMode = mode, tasks?: RevisionNoteEntry[]) => ({
     chapterId,
     revision: pRef.current!.revision,
     mode: taskMode,
-    instruction: (instruction || defaultInstruction(taskMode)) + (taskMode === "map" && mapSceneId ? "\n本次只绘制场景：" + (project?.entities.find(e => e.id === mapSceneId)?.name || "当前场景") : ""),
-    selection: selectionRef.current.text,
+    instruction: taskMode === "revision"
+      ? revisionInstruction(tasks || currentRevisionTasks()) + (instruction.trim() ? "\n补充要求：" + instruction : "")
+      : (instruction || defaultInstruction(taskMode)) + (taskMode === "map" && mapSceneId ? "\n本次只绘制场景：" + (project?.entities.find(e => e.id === mapSceneId)?.name || "当前场景") : ""),
+    selection: taskMode === "revision" ? "" : selectionRef.current.text,
   });
   const saveMapToImages = (svg: string, name: string, sourceRunId: string) => {
     const images = pRef.current?.images || [];
@@ -901,8 +928,9 @@ export default function App() {
       notify((e as Error).message);
     }
   };
-  const runAI = async (taskMode = mode) => {
+  const runAI = async (taskMode = mode,reviewAdvice?:string) => {
     if (!chapter || !project || generating) return;
+    setMode(taskMode);
     try {
       await flush();
     } catch {
@@ -912,8 +940,15 @@ export default function App() {
     if (p.id !== project.id || activeChapterRef.current !== chapterId) return;
     const c = p.chapters.find((c) => c.id === chapterId);
     if (!c) return;
+    let tasks: RevisionNoteEntry[] | undefined;
+    try { if (taskMode === "revision") tasks = currentRevisionTasks(); }
+    catch (e) { notify((e as Error).message); return; }
+    const input = aiInput(taskMode, tasks);
+    if(taskMode==="review"&&reviewAdvice)input.instruction+="\n请依据以下已有审稿意见生成可替换的完整段落，重新核对当前正文与设定，过期或无依据的意见不强行执行：\n"+reviewAdvice;
     const selection = { ...selectionRef.current };
     const initial: Candidate = {
+      revisionSignatures:tasks?[contextSignature(p)]:undefined,
+      revisionTasks: tasks,
       text: "",
       mode: taskMode,
       chapterId: c.id,
@@ -929,14 +964,20 @@ export default function App() {
     setRightTab("ai");
     setRightVisible(true);
     setGenerating(true);
+    const startedAt=Date.now();
+    setAIProgress({thinking:"",truncated:false,answerStarted:false,startedAt,attempt:0});
     const controller = new AbortController();
     abortRef.current = controller;
     let completeText = "";
     try {
+      for (let attempt = 0; attempt < (tasks || taskMode === "review" ? 2 : 1); attempt++) {
+      if(attempt>0)setAIProgress({thinking:"",truncated:false,answerStarted:false,startedAt,attempt});
+      let retryNeeded = false;
+      completeText = "";
       const r = await fetch(apiURL(`/projects/${p.id}/generate`), {
         method: "POST",
         headers: apiHeaders(true),
-        body: JSON.stringify(aiInput(taskMode)),
+        body: JSON.stringify(input),
         signal: controller.signal,
       });
       if (!r.ok) throw Error((await r.json()).error);
@@ -956,14 +997,44 @@ export default function App() {
           if (!line.startsWith("data: ")) continue;
           const ev = JSON.parse(line.slice(6));
           if (ev.type === "context") setContext(ev.data);
+          if (ev.type === "thinking" && typeof ev.data === "string") {
+            setAIProgress(current=>{
+              if(!current||controller.signal.aborted)return current;
+              const thinking=current.thinking+ev.data;
+              return {...current,thinking:thinking.slice(-32000),truncated:current.truncated||thinking.length>32000};
+            });
+          }
           if (ev.type === "delta") {
+            setAIProgress(current=>current?{...current,answerStarted:true}:current);
             completeText += ev.data;
             setCandidate({ ...initial, text: completeText });
           }
           if (ev.type === "error") throw Error(ev.data);
           if (ev.type === "done") {
             done = true;
+            completeText = ev.data.text;
+            const reviewCorrection = taskMode === "review" && attempt === 0 ? reviewRetryInstruction(completeText) : "";
+            if (reviewCorrection) {
+              retryNeeded = true;
+              initial.retrying = true;
+              input.instruction += reviewCorrection;
+              notify("AI 返回的建议未实际修改，正在按意见重新生成一次。");
+              setCandidate({ ...initial, text: "" });
+              break;
+            }
+            if (tasks && attempt === 0) {
+              let unchanged: string[] = [];
+              try { unchanged = parseRevisionReplacements(completeText, tasks).filter(item => !revisionHasChange(tasks!.find(t => t.id === item.id)!.quote, item.text)).map(item => item.id); } catch { /* Invalid schema is shown by the candidate view; it cannot be accepted. */ }
+              if (unchanged.length) {
+                retryNeeded = true;
+                initial.retrying = true;
+                input.instruction += "\n重试纠正：上一轮以下标记原样返回，未落实修改意见：" + unchanged.join("、") + "。这次必须逐条执行意见并返回有实际变化的改文，不能抄回原文。仍须返回全部请求ID的完整JSON结果。";
+                setCandidate({ ...initial, text: "" });
+                break;
+              }
+            }
             initial.id = ev.data.id;
+            setAIProgress(null);
             initial.model = ev.data.model;
             completeText = ev.data.text;
             setCandidate({ ...initial, text: completeText, complete: true });
@@ -989,12 +1060,16 @@ export default function App() {
         }
       }
       if (!done) throw Error("生成连接中断，候选未完成，可复制已有内容。");
+      if (retryNeeded) continue;
+      break;
+      }
     } catch (e) {
       if ((e as Error).name !== "AbortError") notify((e as Error).message);
       else notify("已停止生成，未修改正文");
     } finally {
       if (abortRef.current === controller) {
         setGenerating(false);
+        setAIProgress(null);
         abortRef.current = null;
       }
     }
@@ -1004,13 +1079,26 @@ export default function App() {
     if (
       candidate.projectId !== project?.id ||
       candidate.chapterId !== chapterId ||
-      JSON.stringify(chapter.content) !== JSON.stringify(candidate.original) ||
-      contextSignature(pRef.current!) !== candidate.contextSignature
+      (candidate.mode === "revision"
+        ? !(candidate.revisionSignatures||[candidate.contextSignature]).includes(contextSignature(pRef.current!))
+        : JSON.stringify(chapter.content) !== JSON.stringify(candidate.original) || contextSignature(pRef.current!) !== candidate.contextSignature)
     ) {
       notify("正文或上下文已变化，候选不能直接覆盖。请复制候选或重新生成。");
       return;
     }
     const editor = editorRef.current;
+    let acceptedRevisionCount=0;
+    if (candidate.mode === "revision") {
+      try {
+        const originalTasks = candidate.revisionTasks || [];
+        const tasks = remainingRevisionTasks(editor.state.doc,originalTasks);
+        const replacements = parseRevisionReplacements(candidate.text, originalTasks).filter(r=>tasks.some(t=>t.id===r.id));
+        acceptedRevisionCount=replacements.filter(r=>revisionHasChange(tasks.find(t=>t.id===r.id)!.quote,r.text)).length;
+        editor.view.dispatch(applyRevisionReplacements(editor.state, tasks, replacements));
+        editor.view.dispatch(closeHistory(editor.state.tr));
+        editor.view.focus();
+      } catch (e) { notify((e as Error).message); return; }
+    } else {
     const paras = doc(candidate.text).content!;
     if (candidate.mode === "continue")
       editor
@@ -1028,13 +1116,53 @@ export default function App() {
         )
         .run();
     else editor.commands.setContent(doc(candidate.text));
+    }
     edit((p) => {
       const r = p.aiRuns.find((r) => r.id === candidate.id);
       if (r) r.accepted = true;
     });
     setCandidate(null);
-    notify("候选已采纳，可通过撤销或版本历史恢复");
+    notify(candidate.mode === "revision" ? `已采纳剩余 ${acceptedRevisionCount} 处实际修改；未改动的标记仍待修改，可一次撤销恢复` : "候选已采纳，可通过撤销或版本历史恢复");
   };
+  const replaceOneRevision = (id:string) => {
+    if(!candidate?.complete || generating || !editorRef.current || !pRef.current)return;
+    const editor=editorRef.current;
+    if(candidate.projectId!==pRef.current.id || candidate.chapterId!==chapterId || !(candidate.revisionSignatures||[candidate.contextSignature]).includes(contextSignature(pRef.current))){notify("正文或上下文已变化，请重新生成后替换。");return;}
+    try{
+      const originals=candidate.revisionTasks||[];
+      const task=remainingRevisionTasks(editor.state.doc,originals).find(t=>t.id===id);
+      if(!task)throw Error("这处标记已处理，无需再次替换。");
+      const replacement=parseRevisionReplacements(candidate.text,originals).find(r=>r.id===id)!;
+      editor.view.dispatch(applyRevisionReplacements(editor.state,[task],[replacement]));
+      editor.view.dispatch(closeHistory(editor.state.tr));editor.view.focus();
+      edit(p=>{const run=p.aiRuns.find(r=>r.id===candidate.id);if(run)run.accepted=true;});
+      const signature=contextSignature(pRef.current!);
+      setCandidate({...candidate,original:structuredClone(editor.getJSON()) as Doc,contextSignature:signature,revisionSignatures:Array.from(new Set([...(candidate.revisionSignatures||[candidate.contextSignature]),signature]))});
+      notify("已替换这处原文，其余建议保留，可一次撤销恢复。");
+    }catch(e){notify((e as Error).message);}
+  };
+  const locateSource: LocateSource = (text, hint) => {
+    const editor = editorRef.current;
+    if (!editor || editor.isDestroyed || activeChapterRef.current !== chapterId) { notify("请先打开对应章节正文。"); return; }
+    const matches = sourceMatches(editor.state.doc, text, hint);
+    if (!matches.length) { notify("当前正文中找不到这段原文，可能已修改或替换；未跳转到其他相似内容。"); return; }
+    const index = nextSourceMatch(matches, editor.state.selection), target = matches[index];
+    editor.chain().focus().setTextSelection({ from: target.to, to: target.from }).scrollIntoView().run();
+    if (matches.length > 1) notify(`定位原文 ${index + 1}/${matches.length} 处，再次点击切换下一处。`);
+  };
+  const replaceOneReview = (suggestion:ReviewSuggestion,runId:string) => {
+    if(generating || !editorRef.current || !pRef.current)return;
+    const run=pRef.current.aiRuns.find(r=>r.id===runId);
+    if(!run || run.chapterId!==chapterId){notify("审稿对应的章节已切换，请重新打开原章。");return;}
+    try{
+      const editor=editorRef.current;
+      editor.view.dispatch(replaceReviewParagraph(editor.state,suggestion));
+      editor.view.dispatch(closeHistory(editor.state.tr));editor.view.focus();
+      edit(p=>{const record=p.aiRuns.find(r=>r.id===runId);if(record)record.accepted=true;});
+      notify("已替换建议对应的原段落，可一次撤销恢复。");
+    }catch(e){notify((e as Error).message);}
+  };
+  const appliedRevisionIds = () => editorRef.current&&candidate?.revisionTasks ? revisionNotes(editorRef.current.state.doc).filter(n=>n.resolved&&candidate.revisionTasks!.some(t=>t.id===n.id)).map(n=>n.id) : [];
   const runDetection = async () => {
     if (!config?.detectorUrl?.trim()) { setPage("settings"); notify("请填写独立来源检测服务的完整地址并保存；正文模型地址不能代替检测接口。"); return; }
     setDetecting(true);
@@ -1264,7 +1392,7 @@ export default function App() {
         </div>
       )}
       <footer className="shelf-footer">
-        Yantai · 本地小说写作工作台 <span>v0.4.2 / 每次落笔，都有迹可循</span>
+        Yantai · 本地小说写作工作台 <span>v0.4.3 / 每次落笔，都有迹可循</span>
       </footer>
     </div>
   );
@@ -2018,6 +2146,7 @@ export default function App() {
             )}
           </div>
           <div>
+            <ComfySettings config={config} onChange={comfy=>set({comfy})} onSaved={setConfig} notify={notify} />
             <div className="card">
               <div className="card-heading">
                 <Search size={18} />
@@ -2148,7 +2277,7 @@ export default function App() {
           </div>
         )}
       </div>
-      {styleAnalysis && <div className="style-reference-analysis"><h3>文风描写参考</h3><p className="muted">依据下方网页摘要分析；示例由模型原创，来源编号对应下方参考。</p><div>{styleAnalysis}</div></div>}
+      {styleAnalysis && <div className="style-reference-analysis"><h3>文风描写参考</h3><p className="muted">依据下方网页摘要分析；示例由模型原创，来源编号对应下方参考。</p><AIContent text={styleAnalysis} /></div>}
       {results.length > 0 ? (
         <div className="search-results">
           {results.map((r, i) => (
@@ -2407,7 +2536,7 @@ export default function App() {
         <div className="eyebrow">WRITING COMPANION</div>
         <h3>一起，把这一段写好。</h3>
         <p>
-          {config?.model || "尚未配置模型"}{" "}
+          {mode === "comfyui" ? (config?.comfy?.baseUrl || "尚未配置 ComfyUI") : (config?.model || "尚未配置模型")}{" "}
           <button className="text-button" onClick={() => setPage("settings")}>
             配置
           </button>
@@ -2418,11 +2547,37 @@ export default function App() {
           <option value="continue">续写 · 追加到正文</option>
           <option value="expand">扩写 · 选区或整章</option>
           <option value="rewrite">改写 · 选区或整章</option>
+          <option value="revision">按标记修改 · 依据修改意见</option>
           <option value="ideas">原创构思 · 不改正文</option>
           <option value="review">AI 审稿 · 不改正文</option>
-          <option value="map">地图绘制 · 场景平面图</option>
+          <option value="map">场景平面图（SVG）</option>
+          <option value="comfyui">场景绘制（ComfyUI）</option>
         </select>
       </Field>
+      {mode === "comfyui" && project && chapter && <ComfyImagePanel key={project.id+chapter.id} config={config} project={project} chapter={chapter} onSettings={()=>setPage("settings")} onPrepare={async()=>{
+        await flush();
+        if(pRef.current?.id!==project.id || activeChapterRef.current!==chapter.id)throw Error("项目或章节已切换，请在当前章节重新生成");
+        return {revision:pRef.current.revision,signature:contextSignature(pRef.current)};
+      }} onCheck={signature=>{
+        if(pRef.current?.id!==project.id || activeChapterRef.current!==chapter.id || contextSignature(pRef.current)!==signature)throw Error("AI 分析期间正文或设定已变化，请重新生成，尚未提交 ComfyUI");
+      }} onImages={async images=>{
+        if(pRef.current?.id!==project.id)throw Error("项目已切换，请在原项目保存生成图片");
+        const existing=pRef.current.images||[];
+        const pending=images.filter(im=>!existing.some(old=>old.sourceRunId===im.sourceRunId));
+        if(existing.length+pending.length>200 || existing.reduce((n,i)=>n+i.size,0)+pending.reduce((n,i)=>n+i.size,0)>32*1024*1024)throw Error("项目图片栏容量已满，请清理后重试保存。生成预览暂时保留在此处。");
+        if(pending.length)edit(p=>{p.images=[...(p.images||[]),...pending];});
+        await flush();
+      }} />}
+      <div hidden={mode === "comfyui"}>
+      {mode === "revision" && <section className="ai-revision-picker">
+        <h4>本章待修改标记</h4>
+        <p className="muted">勾选本次要修改的位置，并在修改标记面板填写意见。生成后逐处对比，采纳时只替换勾选范围并标为已处理。</p>
+        {editorRef.current && revisionNotes(editorRef.current.state.doc).filter(n => !n.resolved).map((n, i) => <label key={n.id} className="ai-revision-choice">
+          <input type="checkbox" disabled={generating} checked={!revisionExcluded.includes(n.id)} onChange={e => setRevisionExcluded(ids => e.target.checked ? ids.filter(id => id !== n.id) : [...ids, n.id])} />
+          <span><b>标记 {i + 1}</b><button type="button" className="ai-revision-quote source-quote" title="定位原文" onClick={e=>{e.preventDefault();locateSource(n.quote,{markId:n.id});}}>{n.quote}</button><small>{n.note || "尚未填写修改意见，请到正文的修改标记面板补充"}</small></span>
+        </label>)}
+        {(!editorRef.current || !revisionNotes(editorRef.current.state.doc).some(n => !n.resolved)) && <p className="info-note">暂无待修改标记。选中正文，点击工具栏“修改标记”，填写意见后即可使用。</p>}
+      </section>}
       {mode === "map" && <Field label="绘制场景"><select aria-label="绘制场景" value={mapSceneId} onChange={e=>setMapSceneId(e.target.value)}><option value="">综合本章有效场景</option>{project && chapter && boundEntities(project,chapter).filter(e=>e.kind==="location").map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select><small className="muted">用当前文字模型绘制房间、地点及道路连接，可在下方说明中指定布局。地图单独保存，不修改正文。</small></Field>}
       <Field label="这次想怎么写？">
         <textarea
@@ -2467,6 +2622,7 @@ export default function App() {
           </button>
         </div>
       )}
+      {generating&&aiProgress&&<AIProgress progress={aiProgress}/>}
       {candidate && (
         <div className="candidate">
           <div className="candidate-heading">
@@ -2476,18 +2632,20 @@ export default function App() {
               {candidate.complete ? "已完成" : generating ? "生成中" : "未完成"}
             </span>
           </div>
-          {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} />}
+          {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} onLocate={locateSource} />}
+          {candidate.mode === "revision" && <div className="candidate-text"><RevisionCandidate text={candidate.text} tasks={candidate.revisionTasks || []} complete={candidate.complete} retrying={candidate.retrying} appliedIds={appliedRevisionIds()} onReplace={replaceOneRevision} onLocate={locateSource}/></div>}
+          {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:<p className="muted">正在审稿并生成可替换的修改段落……</p>}</div>}
           {candidate.mode === "map" && candidate.complete && <SceneMapPreview text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
-          <div className="candidate-text" hidden={candidate.mode === "map" && candidate.complete}>
-            {candidate.text || <span className="muted">等待模型响应……</span>}
+          <div className="candidate-text" hidden={candidate.mode === "revision" || candidate.mode === "review" || (candidate.mode === "map" && candidate.complete)}>
+            {candidate.text ? <AIContent text={candidate.text} onLocate={locateSource} sourceText={chapter?.text} /> : <span className="muted">等待模型响应……</span>}
           </div>
           <div className="candidate-actions">
             {!["review", "ideas", "map"].includes(candidate.mode) && (
               <Button
-                disabled={!candidate.complete || generating}
+                disabled={!candidate.complete || generating || (candidate.mode === "revision" && !canAcceptRevision(candidate.text, candidate.revisionTasks || [],appliedRevisionIds()))}
                 onClick={acceptCandidate}
               >
-                <Check size={15} /> 采纳候选
+                <Check size={15} /> {candidate.mode === "revision" ? "采纳实际修改" : "采纳候选"}
               </Button>
             )}
             <Button
@@ -2506,7 +2664,7 @@ export default function App() {
           <small>{["review","map"].includes(candidate.mode) ? "完成的结果自动保存到项目，可在下方历史列表或审稿栏重新查看。" : "候选不会自动改正文。采纳前会检查正文是否已变化。"}</small>
         </div>
       )}
-      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} onSave={saveMapToImages} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
+      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} onSave={saveMapToImages} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
       {!candidate && (
         <div className="small-empty">
           <Sparkles size={27} />
@@ -2517,6 +2675,7 @@ export default function App() {
           </p>
         </div>
       )}
+      </div>
     </>
   );
   const reviewPanel = () => (
@@ -2562,7 +2721,7 @@ export default function App() {
             review.issues.filter((i) => i.kind === "疑似错别字" || i.kind === "标点").map((i, n) => (
               <div className="review-issue" key={n}>
                 <div><span className="tag gold">{i.kind}</span><small>第 {i.paragraph} 段</small></div>
-                <blockquote>{i.quote}</blockquote><p>{i.message}</p>
+                <blockquote><button className="source-quote" title="定位原文" onClick={()=>locateSource(i.quote,{paragraph:i.paragraph})}>{i.quote}</button></blockquote><p>{i.message}</p>
               </div>
             ))
           ) : <div className="info-note success">未发现规则库中的常见错别字或重复标点。</div>}
@@ -2571,7 +2730,7 @@ export default function App() {
             {review.issues.filter((i) => i.kind !== "疑似错别字" && i.kind !== "标点").map((i, n) => (
               <div className="review-issue" key={n}>
                 <div><span className="tag gold">{i.kind}</span><small>第 {i.paragraph} 段</small></div>
-                <blockquote>{i.quote}</blockquote><p>{i.message}</p>
+                <blockquote><button className="source-quote" title="定位原文" onClick={()=>locateSource(i.quote,{paragraph:i.paragraph})}>{i.quote}</button></blockquote><p>{i.message}</p>
               </div>
             ))}
           </details>
@@ -2588,7 +2747,7 @@ export default function App() {
           placeholder="命运的齿轮\n不禁陷入了沉思"
         />
       </div>
-      {project && chapter && <AIRunHistory key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} reviewsOnly onDownload={()=>{}} />}
+      {project && chapter && <AIRunHistory onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} reviewsOnly onDownload={()=>{}} />}
       <div className="review-section">
         <h4>AI 使用记录与来源检测</h4>
         <p>
@@ -2808,7 +2967,7 @@ export default function App() {
                 <Library size={17} /> 返回书架
               </button>
               <div className="local-indicator">
-                <span className="status-dot" /> 本地工作空间 <span>v0.4.2</span>
+                <span className="status-dot" /> 本地工作空间 <span>v0.4.3</span>
               </div>
             </div>
           </aside>
@@ -3075,6 +3234,7 @@ export default function App() {
                     {s.name}
                     <small>{s.source}</small>
                   </summary>
+                  {["当前正文","选中文本"].includes(s.name)&&context.chapterId===chapterId&&<button className="source-locate" onClick={()=>{setContextOpen(false);locateSource(s.text);}}>定位原文</button>}
                   <pre>{s.text}</pre>
                 </details>
               ))}

@@ -1,0 +1,145 @@
+{
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Yantai",
+      "images": [
+        "39:38",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SaveImage"
+    }
+  },
+  "39:29": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux3_image_klein_sd_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "UNETLoader"
+    }
+  },
+  "39:31": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_4b_int8_convrot.safetensors",
+      "type": "flux3",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "CLIPLoader"
+    }
+  },
+  "39:33": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "39:36": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": [
+        "39:19",
+        0
+      ],
+      "height": [
+        "39:19",
+        1
+      ],
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "EmptyFlux2LatentImage"
+    }
+  },
+  "39:30": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "39:31",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
+  },
+  "39:37": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "39:31",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
+  },
+  "39:19": {
+    "class_type": "ResolutionSelector",
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 2,
+      "multiple": 8
+    },
+    "_meta": {
+      "title": "ResolutionSelector"
+    }
+  },
+  "39:32": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 10959362227049,
+      "steps": 12,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "39:29",
+        0
+      ],
+      "positive": [
+        "39:30",
+        0
+      ],
+      "negative": [
+        "39:37",
+        0
+      ],
+      "latent_image": [
+        "39:36",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "39:38": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "39:32",
+        0
+      ],
+      "vae": [
+        "39:33",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecode"
+    }
+  }
+}

@@ -76,3 +76,48 @@ func TestSceneMapUsesCurrentContextAndMapPrompt(t *testing.T) {
 		t.Fatalf("map generation: %v %s", err, out)
 	}
 }
+
+func TestMarkedRevisionUsesContextAndScopedPrompt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Messages) != 2 {
+			t.Error("missing messages")
+			return
+		}
+		for _, required := range []string{"定点修改编辑", "replacements", "不改写整章或未标记", "不得将原文直接复制", "逐项对照修改意见"} {
+			if !strings.Contains(body.Messages[0].Content, required) {
+				t.Errorf("missing revision system constraint: %s", required)
+			}
+		}
+		for _, required := range []string{"对白更含蓄", "mark-a", "青石镇旧宅", "章纲", "文风要求"} {
+			if !strings.Contains(body.Messages[1].Content, required) {
+				t.Errorf("missing revision context: %s", required)
+			}
+		}
+		if strings.LastIndex(body.Messages[1].Content, "## 任务") < strings.LastIndex(body.Messages[1].Content, "## 当前正文") {
+			t.Error("editing task must follow the full prose context")
+		}
+		answer := `{"replacements":[{"id":"mark-a","text":"她停了停，轻声应下。"}]}`
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": map[string]string{"content": answer}, "done": true})
+	}))
+	defer server.Close()
+	p := NewProject("", true)
+	p.Style = "对白含蓄"
+	cfg := DefaultConfig()
+	cfg.BaseURL, cfg.Model = server.URL, "fixture"
+	cp, err := BuildContext(p, AIRequest{ChapterID: p.Chapters[0].ID, Mode: "revision", Instruction: `修改标记：{"id":"mark-a","quote":"她答应了","note":"对白更含蓄"}`}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Generate(context.Background(), cfg, cp, "revision", func(string) error { return nil })
+	if err != nil || !strings.Contains(out, "replacements") {
+		t.Fatalf("marked revision: %v %s", err, out)
+	}
+}

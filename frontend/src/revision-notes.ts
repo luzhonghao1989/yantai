@@ -36,7 +36,7 @@ export function revisionNotes(doc: Node): RevisionNoteEntry[] {
     if (existing) { existing.to = pos + node.nodeSize; existing.quote += node.isText ? node.text : "\n"; }
     else found.set(mark.attrs.id, { id: mark.attrs.id, note: mark.attrs.note || "", resolved: !!mark.attrs.resolved, from: pos, to: pos + node.nodeSize, quote: node.text || "\n" });
   });
-  return [...found.values()];
+  return [...found.values()].map(note => ({ ...note, quote: doc.textBetween(note.from, note.to, "\n") }));
 }
 
 // Update every fragment of a mark, including fragments split by typing/formatting.
