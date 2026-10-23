@@ -207,3 +207,9 @@ ComfyUI 最终 Windows 桌面及浏览器程序构建完成，Windows 压缩包�
 - AI 文字任务新增等待/思考/正式输出状态、已用秒数、可折叠思考面板与滚动跟随，限制展示最近 32000 字符；思考只存于临时界面状态，不写入 Candidate 或 AIRun，完成/停止/失败/切章清理。重试清空上一轮思考并显示重试状态。
 - 自动测试覆盖两种服务、思考字段、标签分片、Unicode、未闭合思考、无思考服务、仅思考无正文、回调取消、非文本元数据，以及 HTTP SSE 的 thinking/delta/done 分离。前端构建、Go test/vet、现有 AI 排版/替换/定位回归和两个 Windows 程序构建通过。
 - 隔离浏览器与模型夹具实测：生成时实时显示思考及递增时间，可折叠；正式答案阶段更新状态，完成后面板消失；思考时停止立即清理；不返回思考文本时显示等待并正常完成。API 读回只有两条已完成审稿，取消任务不落记录，思考未进入最终 JSON，原文保持不变。截图 screenshots/ai-thinking-stream-v042.png。未把夹具思考内容当作真实模型测试。
+
+## v0.4.3 发布验证（2026-10-23）
+
+- npm 包与锁文件、桌面产品信息、两处界面版本及联网检索 User-Agent 统一为 0.4.3；旧版本验证记录保留原日期和版本。新增 docs/releases/v0.4.3.md 更新说明。修复 Windows 资源语言与版本字段，文件属性 ProductName 为 Yantai、ProductVersion 与 FileVersion 为 0.4.3。
+- 全部 tests/*.test.mjs、前端生产构建、go test ./...、go vet ./... 与桌面/浏览器程序构建通过。隔离空数据目录运行最终浏览器程序，API 与内嵌界面资源正常，界面版本为 v0.4.3。
+- Yantai-v0.4.3-windows-amd64.zip 仅含 Yantai.exe、Yantai-browser.exe，校验压缩包内容与构建程序 SHA-256 一致，另生成校验清单。提交不包含本地 data、密钥、QA 目录或用户原始 workflow 文件。
