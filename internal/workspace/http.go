@@ -79,6 +79,25 @@ func (s *Server) Handler() http.Handler {
 		}
 		reply(w, 200, p)
 	})
+	mux.HandleFunc("DELETE /api/projects/{id}/local", func(w http.ResponseWriter, r *http.Request) {
+		if s.Remote {
+			reply(w, 403, map[string]string{"error": "只能在客户端删除本机项目，服务端项目保持不变"})
+			return
+		}
+		var in struct {
+			Draft *Project `json:"draft"`
+		}
+		if err := decode(w, r, &in); err != nil {
+			fail(w, err)
+			return
+		}
+		out, err := s.Store.DeleteLocalProject(r.PathValue("id"), in.Draft)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, out)
+	})
 	mux.HandleFunc("PUT /api/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var p Project
 		if err := decode(w, r, &p); err != nil {
@@ -491,7 +510,7 @@ func (s *Server) Handler() http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Yantai-Token")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 				if r.Method == "OPTIONS" {
 					w.WriteHeader(204)
 					return

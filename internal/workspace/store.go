@@ -17,14 +17,15 @@ var ErrConflict = errors.New("内容已被其他窗口更新，请导出当前�
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Store struct {
-	syncMu      sync.Mutex
-	syncRunMu   sync.Mutex
-	comfyMu     sync.Mutex
-	comfyJobs   map[string]comfyJob
-	Root        string
-	mu          sync.Mutex
-	embeddingMu sync.Mutex
-	embeddings  map[string][]float64
+	syncMu         sync.Mutex
+	syncRunMu      sync.Mutex
+	comfyMu        sync.Mutex
+	comfyJobs      map[string]comfyJob
+	Root           string
+	mu             sync.Mutex
+	projectFilesMu sync.RWMutex
+	embeddingMu    sync.Mutex
+	embeddings     map[string][]float64
 }
 type ProjectInfo struct {
 	ID          string `json:"id"`
@@ -46,10 +47,29 @@ func NewStore(root string) (*Store, error) {
 	err := os.MkdirAll(filepath.Join(root, "projects"), 0700)
 	return &Store{Root: root}, err
 }
-func (s *Store) db(id string, create bool) (*sql.DB, error) {
+
+type projectDB struct {
+	*sql.DB
+	release   func()
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (d *projectDB) Close() error {
+	d.closeOnce.Do(func() { d.closeErr = d.DB.Close(); d.release() })
+	return d.closeErr
+}
+
+func (s *Store) db(id string, create bool) (result *projectDB, resultErr error) {
 	if !validID.MatchString(id) {
 		return nil, errors.New("项目 ID 无效")
 	}
+	s.projectFilesMu.RLock()
+	defer func() {
+		if result == nil {
+			s.projectFilesMu.RUnlock()
+		}
+	}()
 	dir := filepath.Join(s.Root, "projects", id)
 	if create {
 		if err := os.MkdirAll(dir, 0700); err != nil {
@@ -70,7 +90,7 @@ func (s *Store) db(id string, create bool) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return db, nil
+	return &projectDB{DB: db, release: s.projectFilesMu.RUnlock}, nil
 }
 func (s *Store) Create(name string, demo bool) (Project, error) {
 	p := NewProject(name, demo)

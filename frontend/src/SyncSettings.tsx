@@ -21,9 +21,10 @@ export function useSyncClient(prepare:()=>Promise<SyncMarker>,complete:(report:S
  },[]);
  useEffect(()=>{if(remote||!settings?.automatic)return;const timer=setInterval(()=>void run(),settings.intervalMinutes*60000);return()=>clearInterval(timer)},[remote,settings?.automatic,settings?.intervalMinutes,run]);
  const save=async(value:SyncConfig)=>{const saved=await api<SyncConfig>("/sync/settings","PUT",value);setSettings(saved);setError("");notify("服务端同步设置已保存")};
- return {settings,remote,last,busy,error,run,save};
+ const forgetProject=(id:string)=>{setLast(v=>v?{...v,items:v.items.filter(i=>i.id!==id)}:v);setError("")};
+ return {settings,remote,last,busy,error,run,save,forgetProject};
 }
-export default function SyncSettings({client}:{client:ReturnType<typeof useSyncClient>}){
+export default function SyncSettings({client,onDeleteLocal}:{client:ReturnType<typeof useSyncClient>;onDeleteLocal?:(id:string)=>void}){
  const [form,setForm]=useState<SyncConfig>({serverUrl:"",token:"",hasToken:false,automatic:false,intervalMinutes:5}),[saving,setSaving]=useState(false),[error,setError]=useState("");
  useEffect(()=>{if(client.settings)setForm(client.settings)},[client.settings]);
  if(client.remote)return <div className="card"><h3>服务端工作台</h3><p className="muted">这里的修改直接保存在服务器。请在 Yantai.exe 的“服务端同步”中填写服务器的 HTTPS 同步端口地址、访问密钥和必要的证书指纹，即可同步到电脑。</p></div>;
@@ -41,6 +42,7 @@ export default function SyncSettings({client}:{client:ReturnType<typeof useSyncC
  {client.last&&<div className="sync-report"><h4>上次同步 · {new Date(client.last.finishedAt||client.last.startedAt).toLocaleString("zh-CN")}</h4><p className="muted">{client.last.serverUrl}</p>
  {!client.last.items.length&&<p>暂无项目需要同步。</p>}
  {client.last.items.map(item=><div className="sync-item" key={item.id}><strong>{item.name}</strong><p className={item.action==="conflict"||item.action==="error"?"info-note":"muted"}>{item.message}</p>
+ {item.action==="error"&&item.message.startsWith("本机项目")&&onDeleteLocal&&<button className="btn secondary" disabled={client.busy} onClick={()=>onDeleteLocal(item.id)}>保留备份，从服务端重新下载</button>}
  {item.action==="conflict"&&client.settings?.serverUrl===client.last?.serverUrl&&<div className="inline"><button className="btn secondary" disabled={client.busy||!item.localHash} onClick={()=>void client.run([{id:item.id,direction:"upload",localHash:item.localHash||"",remoteHash:item.remoteHash||""}])}>保留本机，上传</button><button className="btn secondary" disabled={client.busy||!item.remoteHash} onClick={()=>void client.run([{id:item.id,direction:"download",localHash:item.localHash||"",remoteHash:item.remoteHash||""}])}>使用服务端，下载</button></div>}
  </div>)}</div>}
  </section>;

@@ -138,3 +138,6 @@ GET /api/projects/{id}/images/{imageId} 返回原图，需要同样的本机会�
 
 
 公网同步入口仅暴露 GET /api/sync/manifest、GET/PUT /api/sync/projects/{id}，要求 TLS 与 Bearer 访问密钥。不提供登录、配置、Agent API 或网页，其他请求为空 404。GET/PUT /api/sync/settings、POST /api/sync/run 仅在本机客户端使用；同步配置新增 tlsFingerprint，可填 SHA-256 证书指纹，serverUrl 必须为无路径的 HTTPS 地址。私有证书指纹从服务端终端核对后填写，留空时按系统 CA 和域名验证。
+
+
+客户端本机副本删除：`DELETE /api/projects/{id}/local`，JSON 请求 `{ "draft": null }` 或传入同 ID 的未保存完整 Project。保留原项目目录和可选草稿后返回 `{ "id": "...", "backupPath": "..." }`，清除该 ID 在各同步服务端的基线，下一次同步可重新下载。服务端模式拒绝此接口；删除不向远端传播，公共图片不清理。桌面请求仍需本机会话令牌。不得用此接口代替删除服务端项目。

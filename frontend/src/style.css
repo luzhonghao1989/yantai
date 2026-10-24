@@ -2337,3 +2337,7 @@ a:hover {
 .server-login input,.sync-settings > label > input:not([type=checkbox]) { display: block; width: 100%; margin-top: 7px; }
 .sync-report { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 12px; }
 .sync-item { padding: 12px 0; border-bottom: 1px solid var(--line); }
+
+.book-entry { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.book-entry .book-card { width: 100%; flex: 1; }
+.book-delete { align-self: flex-end; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }

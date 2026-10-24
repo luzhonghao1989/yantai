@@ -613,6 +613,34 @@ export default function App() {
     setRevisionExcluded([]);
     selectionRef.current = { from: 0, to: 0, text: "" };
   }, [chapterId, project?.id]);
+  const deleteLocalProject = (id: string, redownload = false) => {
+    if (syncClient.remote || syncClient.busy) return;
+    const book = books.find(b => b.id === id);
+    setSyncOpen(false);
+    setDialog({
+      title: redownload ? "重新下载本机项目" : "删除本机项目",
+      description: `只移除本机的“${book?.name || id}”，不会删除服务端项目。数据库、历史及未保存草稿会保留在本机备份目录。${redownload ? "确认后重新发起同步，从服务端下载该项目。" : "服务端存在同一项目时，下次同步会重新下载。"}`,
+      fields: [], button: redownload ? "保留备份并重新下载" : "保留备份并删除本机副本",
+      submit: async () => {
+        if (pRef.current?.id === id) {
+          if (timer.current) clearTimeout(timer.current);
+          await saving.current?.catch(() => {});
+        }
+        const draft = pRef.current?.id === id ? structuredClone(pRef.current) : await draftCache.read(id);
+        const out = await api<{id:string;backupPath:string}>(`/projects/${id}/local`, "DELETE", {draft});
+        if (pRef.current?.id === id) {
+          abortRef.current?.abort(); searchAbort.current?.abort();
+          pRef.current = null; dirty.current = 0; saved.current = 0;
+          setProject(null); setChapterId(""); setReview(null); setCandidate(null); setShelf(true); setSaveStatus("已保存");
+        }
+        syncClient.forgetProject(id);
+        await draftCache.remove(id);
+        await refreshBooks();
+        notify("已移除本机副本，备份保留在：" + out.backupPath);
+        if (redownload) { setSyncOpen(true); void syncClient.run(); }
+      },
+    });
+  };
   const openProject = async (id: string) => {
     try {
       await flush();
@@ -1381,9 +1409,9 @@ export default function App() {
       </div>
       <div className="book-grid">
         {books.map((b, i) => (
+          <div className="book-entry" key={b.id}>
           <button
             className="book-card"
-            key={b.id}
             onClick={() => b.error ? notify(b.error + "；请先备份数据，勿直接覆盖此项目。") : openProject(b.id)}
           >
             <div className={"book-cover cover-" + (i % 4)}>
@@ -1405,6 +1433,8 @@ export default function App() {
               </div>
             </div>
           </button>
+          {!syncClient.remote && <button className="text-button book-delete" disabled={syncClient.busy} onClick={() => deleteLocalProject(b.id)}><Trash2 size={13}/> 删除本机项目</button>}
+          </div>
         ))}
         <button className="new-book-card" onClick={() => createBook()}>
           <div className="new-book-icon">
@@ -2178,7 +2208,7 @@ export default function App() {
             )}
           </div>
           <div>
-            <SyncSettings client={syncClient} />
+            <SyncSettings client={syncClient} onDeleteLocal={id=>deleteLocalProject(id,true)} />
             <ComfySettings config={config} onChange={comfy=>set({comfy})} onSaved={setConfig} notify={notify} />
             <div className="card">
               <div className="card-heading">
@@ -3245,7 +3275,7 @@ export default function App() {
           notify={notify}
         />
       )}
-      {syncOpen&&<div className="modal-overlay"><div className="modal wide"><button className="modal-close icon" aria-label="关闭服务端同步" onClick={()=>setSyncOpen(false)}><X size={20}/></button><SyncSettings client={syncClient}/></div></div>}
+      {syncOpen&&<div className="modal-overlay"><div className="modal wide"><button className="modal-close icon" aria-label="关闭服务端同步" onClick={()=>setSyncOpen(false)}><X size={20}/></button><SyncSettings client={syncClient} onDeleteLocal={id=>deleteLocalProject(id,true)}/></div></div>}
       {contextOpen && context && (
         <div className="modal-overlay">
           <div className="modal wide">
