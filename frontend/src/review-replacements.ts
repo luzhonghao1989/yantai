@@ -43,9 +43,37 @@ export function reviewReplacementPresent(doc:Node,suggestion:ReviewSuggestion){
   const paragraphs=reviewParagraphs(doc),lines=suggestion.replacement.split("\n");
   return !!suggestion.replacement.trim()&&paragraphs.some((_,i)=>lines.every((line,j)=>paragraphs[i+j]?.text===line));
 }
+export function reviewReplacementPlan(doc:Node,suggestions:ReviewSuggestion[]){
+  const candidates:{suggestion:ReviewSuggestion;target:ReturnType<typeof reviewTarget>}[]=[];
+  const skipped:{suggestion:ReviewSuggestion;reason:string}[]=[];
+  for(const suggestion of suggestions){
+    try{candidates.push({suggestion,target:reviewTarget(doc,suggestion)});}
+    catch(e){skipped.push({suggestion,reason:(e as Error).message});}
+  }
+  const items=candidates.filter((item,i)=>{
+    const conflict=candidates.some((other,j)=>i!==j&&item.target.from<other.target.to&&other.target.from<item.target.to);
+    if(conflict)skipped.push({suggestion:item.suggestion,reason:"同一原段落有多条冲突建议，请逐条选择替换。"});
+    return !conflict;
+  });
+  return {items,skipped};
+}
+function reviewSlice(state:EditorState,suggestion:ReviewSuggestion,from:number){
+  const marks=(state.doc.nodeAt(from)?.marks||[]).filter(m=>m.type.name!=="revisionNote");
+  const paragraphs=suggestion.replacement.split("\n").map(line=>state.schema.nodes.paragraph.create(null,line?state.schema.text(line,marks):undefined));
+  return new Slice(Fragment.fromArray(paragraphs),1,1);
+}
+export function replaceReviewParagraphs(state:EditorState,suggestions:ReviewSuggestion[]){
+  // Resolve every anchor against the same document before making any edits.
+  // Reverse order prevents new paragraphs or text from retargeting another item.
+  const plan=reviewReplacementPlan(state.doc,suggestions);
+  if(!plan.items.length)throw Error("没有可一键替换的建议：原文已变化、已替换、无实际改动或存在冲突。");
+  let transaction=closeHistory(state.tr);
+  for(const {suggestion,target} of [...plan.items].sort((a,b)=>b.target.from-a.target.from)){
+    transaction=transaction.replaceRange(target.from,target.to,reviewSlice(state,suggestion,target.from));
+  }
+  return {transaction:transaction.scrollIntoView(),replaced:plan.items.length,skipped:plan.skipped.length};
+}
 export function replaceReviewParagraph(state:EditorState,suggestion:ReviewSuggestion){
   const target=reviewTarget(state.doc,suggestion);
-  const marks=(state.doc.nodeAt(target.from)?.marks||[]).filter(m=>m.type.name!=="revisionNote");
-  const paragraphs=suggestion.replacement.split("\n").map(line=>state.schema.nodes.paragraph.create(null,line?state.schema.text(line,marks):undefined));
-  return closeHistory(state.tr).replaceRange(target.from,target.to,new Slice(Fragment.fromArray(paragraphs),1,1)).scrollIntoView();
+  return closeHistory(state.tr).replaceRange(target.from,target.to,reviewSlice(state,suggestion,target.from)).scrollIntoView();
 }

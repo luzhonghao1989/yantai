@@ -15,9 +15,12 @@ import (
 )
 
 type Server struct {
-	Store  *Store
-	Assets fs.FS
-	Token  string
+	Store        *Store
+	Assets       fs.FS
+	Token        string
+	Remote       bool
+	AuthKey      string
+	SecureCookie bool
 }
 
 func reply(w http.ResponseWriter, status int, value any) {
@@ -40,6 +43,8 @@ func (s *Server) Handler() http.Handler {
 	s.registerImages(mux)
 	s.registerComfy(mux)
 	s.registerScenePrompt(mux)
+	s.registerSync(mux)
+	s.registerServerAuth(mux)
 	s.registerAgent(mux)
 	s.registerModelDiscovery(mux)
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -465,15 +470,21 @@ func (s *Server) Handler() http.Handler {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		if !s.Remote && host != "127.0.0.1" && host != "localhost" && host != "::1" {
 			reply(w, 403, map[string]string{"error": "仅允许本机访问"})
 			return
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
 			origin := r.Header.Get("Origin")
 			if origin != "" && origin != "http://"+r.Host && origin != "https://"+r.Host && !(s.Token != "" && (origin == "wails://wails" || origin == "http://wails.localhost" || origin == "https://wails.localhost")) {
 				reply(w, 403, map[string]string{"error": "不允许跨来源请求"})
+				return
+			}
+			public := r.URL.Path == "/api/server-info" || r.URL.Path == "/api/auth/login"
+			if s.Remote && !public && !s.serverAuthenticated(r) {
+				reply(w, 401, map[string]string{"error": "请先登录服务端，或检查同步访问密钥"})
 				return
 			}
 			if s.Token != "" {

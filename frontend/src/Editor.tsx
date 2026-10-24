@@ -1,3 +1,4 @@
+import { localSettings } from "./local-settings";
 import FindReplace from "./FindReplace";
 import { blankLineRanges } from "./remove-blank-lines";
 import RevisionNotes from "./RevisionNotes";
@@ -45,13 +46,13 @@ export default function WritingEditor({
   const callbacks = useRef({ onChange, onSelection });
   callbacks.current = { onChange, onSelection };
   const [font, setFont] = useState(
-    localStorage.getItem("display-font") || "Songti SC, SimSun, serif",
+    localSettings.getItem("display-font") || "Songti SC, SimSun, serif",
   );
   const [size, setSize] = useState(
-    Number(localStorage.getItem("display-size") || 20),
+    Number(localSettings.getItem("display-size") || 20),
   );
   const [line, setLine] = useState(
-    Number(localStorage.getItem("display-line") || 2),
+    Number(localSettings.getItem("display-line") || 2),
   );
   const [indent, setIndent] = useState(true);
   const [count, setCount] = useState(chapter.text.replace(/\s/g, "").length);
@@ -110,7 +111,7 @@ export default function WritingEditor({
     },
     onSelectionUpdate: ({ editor }) => {
       const { from, to } = editor.state.selection;
-      localStorage.setItem(positionKey + ":cursor", String(from));
+      localSettings.setItem(positionKey + ":cursor", String(from));
       callbacks.current.onSelection({
         from,
         to,
@@ -122,15 +123,15 @@ export default function WritingEditor({
     if (editor) onReady(editor);
   }, [editor, onReady]);
   useEffect(() => {
-    localStorage.setItem("display-font", font);
-    localStorage.setItem("display-size", String(size));
-    localStorage.setItem("display-line", String(line));
+    localSettings.setItem("display-font", font);
+    localSettings.setItem("display-size", String(size));
+    localSettings.setItem("display-line", String(line));
   }, [font, size, line]);
   useEffect(() => {
     if (!editor) return;
-    const cursor = Number(localStorage.getItem(positionKey + ":cursor") || 1);
+    const cursor = Number(localSettings.getItem(positionKey + ":cursor") || 1);
     editor.commands.setTextSelection(Math.max(1, Math.min(Number.isFinite(cursor) ? cursor : 1, Math.max(1,editor.state.doc.content.size-1))));
-    const frame = requestAnimationFrame(() => { if (paperScroll.current) paperScroll.current.scrollTop = Number(localStorage.getItem(positionKey + ":scroll") || 0); });
+    const frame = requestAnimationFrame(() => { if (paperScroll.current) paperScroll.current.scrollTop = Number(localSettings.getItem(positionKey + ":scroll") || 0); });
     return () => cancelAnimationFrame(frame);
   }, [editor, positionKey]);
   useEffect(() => {
@@ -252,7 +253,7 @@ export default function WritingEditor({
       </div>
       {findOpen && <FindReplace editor={editor} onClose={() => setFindOpen(false)} />}
       {notesOpen && <RevisionNotes editor={editor} selected={selectedNote} onSelect={setSelectedNote} onClose={() => setNotesOpen(false)} />}
-      <div className="paper-scroll" ref={paperScroll} onScroll={(e) => localStorage.setItem(positionKey + ":scroll", String(e.currentTarget.scrollTop))}>
+      <div className="paper-scroll" ref={paperScroll} onScroll={(e) => localSettings.setItem(positionKey + ":scroll", String(e.currentTarget.scrollTop))}>
         <article
           className={"paper " + (indent ? "indented" : "")}
           style={

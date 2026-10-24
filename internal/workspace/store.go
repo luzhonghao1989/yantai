@@ -16,6 +16,8 @@ var ErrConflict = errors.New("内容已被其他窗口更新，请导出当前�
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Store struct {
+	syncMu      sync.Mutex
+	syncRunMu   sync.Mutex
 	comfyMu     sync.Mutex
 	comfyJobs   map[string]comfyJob
 	Root        string

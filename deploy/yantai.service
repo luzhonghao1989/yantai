@@ -1,0 +1,20 @@
+[Unit]
+Description=Yantai writing and sync server
+After=network.target
+
+[Service]
+Type=simple
+User=yantai
+Group=yantai
+WorkingDirectory=/opt/yantai
+EnvironmentFile=/etc/yantai/server.env
+ExecStart=/opt/yantai/Yantai-server -server -listen 0.0.0.0:48120 -data /var/lib/yantai
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yantai
+
+[Install]
+WantedBy=multi-user.target

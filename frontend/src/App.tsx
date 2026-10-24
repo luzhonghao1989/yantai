@@ -1,3 +1,6 @@
+import SyncSettings, { useSyncClient, type SyncReport, type SyncMarker } from "./SyncSettings";
+import { draftCache } from "./draft-cache";
+import { localSettings } from "./local-settings";
 import { sourceMatches, nextSourceMatch, type LocateSource } from "./source-location";
 import AIProgress, { type GenerationProgress } from "./AIProgress";
 import TextDiff, { docText } from "./TextDiff";
@@ -7,7 +10,7 @@ import { parseSceneMap, sceneMapSVG } from "./scene-map";
 import AIRunHistory from "./AIRunHistory";
 import AIContent from "./AIContent";
 import ReviewResult from "./ReviewResult";
-import { replaceReviewParagraph,reviewRetryInstruction,type ReviewSuggestion } from "./review-replacements";
+import { replaceReviewParagraph,replaceReviewParagraphs,parseReviewResult,reviewRetryInstruction,type ReviewSuggestion } from "./review-replacements";
 import ComfySettings from "./ComfySettings";
 import ComfyImagePanel from "./ComfyImagePanel";
 import RevisionCandidate from "./RevisionCandidate";
@@ -329,7 +332,7 @@ export default function App() {
     [rightVisible, setRightVisible] = useState(true),
     [rightTab, setRightTab] = useState("lore"),
     [collapsed, setCollapsed] = useState<string[]>([]),
-    [theme, setTheme] = useState(localStorage.getItem("theme") || "light"),
+    [theme, setTheme] = useState(localSettings.getItem("theme") || "light"),
     [viewStage, setViewStage] = useState(""),
     [entityId, setEntityId] = useState(""),
     [config, setConfig] = useState<Config | null>(null),
@@ -352,6 +355,7 @@ export default function App() {
     [results, setResults] = useState<SearchResult[]>([]),
     [searching, setSearching] = useState(false);
   const [loreImport, setLoreImport] = useState<{rows: Record<string,string>[]; stageId:string} | null>(null);
+  const [syncOpen,setSyncOpen]=useState(false);
   const [aiProgress,setAIProgress]=useState<GenerationProgress|null>(null);
   const [revisionExcluded, setRevisionExcluded] = useState<string[]>([]);
   const [, signalEditorReady] = useState(0);
@@ -438,7 +442,7 @@ export default function App() {
   }, [notify, refreshBooks]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("theme", theme);
+    localSettings.setItem("theme", theme);
   }, [theme]);
   useEffect(() => {
     const w = window as unknown as {
@@ -455,15 +459,15 @@ export default function App() {
     setLoreImport(null);
     setOutlineVolumeId("overview");
     setDetailVolumeId(p.volumes[0]?.id || "");
-    setStorylineId(localStorage.getItem("storyline:" + p.id) || p.storylines[0]?.id || "");
+    setStorylineId(localSettings.getItem("storyline:" + p.id) || p.storylines[0]?.id || "");
     setEditorEpoch((value) => value + 1);
     pRef.current = p;
     dirty.current = 0;
     saved.current = 0;
     setProject(p);
     setChapterId(
-      p.chapters.some((c) => c.id === localStorage.getItem("chapter:" + p.id))
-        ? localStorage.getItem("chapter:" + p.id)!
+      p.chapters.some((c) => c.id === localSettings.getItem("chapter:" + p.id))
+        ? localSettings.getItem("chapter:" + p.id)!
         : p.chapters[0]?.id || "",
     );
     setSaveStatus("已保存");
@@ -477,6 +481,15 @@ export default function App() {
     setShelf(false);
     setPage("write");
   }, []);
+  const cacheWarnings = useRef(new Set<string>());
+  const cacheDraft = useCallback((p: Project) => {
+    void draftCache.write(p).then(ok => {
+      if (!ok && !cacheWarnings.current.has(p.id)) {
+        cacheWarnings.current.add(p.id);
+        notify("草稿恢复缓存暂不可用，仍会保存到本地数据库，请确认顶部保存状态。");
+      }
+    });
+  }, [notify]);
   const edit = useCallback(
     (fn: (p: Project) => void) => {
       if (!pRef.current) return;
@@ -486,15 +499,9 @@ export default function App() {
       dirty.current++;
       setProject(p);
       setSaveStatus("待保存");
-      try {
-        localStorage.setItem("draft:" + p.id, JSON.stringify(p));
-      } catch {
-        notify(
-          "浏览器恢复缓存已满，正文仍会保存到本地数据库。请注意保存状态。",
-        );
-      }
+      cacheDraft(p);
     },
-    [notify],
+    [cacheDraft],
   );
   const flush: () => Promise<void> = useCallback(async () => {
     if (saving.current) {
@@ -526,10 +533,10 @@ export default function App() {
         saved.current = seq;
         setProject(pRef.current);
         if (dirty.current === saved.current) {
-          localStorage.removeItem("draft:" + p.id);
+          void draftCache.remove(p.id);
           setSaveStatus("已保存");
         } else {
-          localStorage.setItem("draft:" + p.id, JSON.stringify(pRef.current));
+          cacheDraft(pRef.current);
         }
       }
     };
@@ -544,7 +551,21 @@ export default function App() {
     } finally {
       saving.current = null;
     }
-  }, [notify]);
+  }, [notify, cacheDraft]);
+  const prepareSync = useCallback(async ():Promise<SyncMarker> => {
+    await flush();return {id:pRef.current?.id,seq:dirty.current};
+  },[flush]);
+  const completeSync = useCallback(async (report:SyncReport,marker:SyncMarker) => {
+    await refreshBooks();
+    const id=marker.id;
+    if(!id||pRef.current?.id!==id||!report.items.some(item=>item.id===id&&item.action==="downloaded"))return;
+    if(dirty.current!==saved.current||dirty.current!==marker.seq){notify("服务端版本已下载，本窗口的新编辑仍保留；请先导出草稿，再读取最新项目。");return;}
+    const fresh=await api<Project>("/projects/"+id);
+    if(pRef.current?.id!==id||dirty.current!==saved.current||dirty.current!==marker.seq)return;
+    pRef.current=fresh;setProject(fresh);setEditorEpoch(value=>value+1);setSaveStatus("已保存");
+    if(!fresh.chapters.some(c=>c.id===activeChapterRef.current))setChapterId(fresh.chapters[0]?.id||"");
+  },[refreshBooks,notify]);
+  const syncClient=useSyncClient(prepareSync,completeSync,notify);
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     if (project && dirty.current !== saved.current)
@@ -577,7 +598,7 @@ export default function App() {
   }, [flush]);
   useEffect(() => {
     if (project && chapterId)
-      localStorage.setItem("chapter:" + project.id, chapterId);
+      localSettings.setItem("chapter:" + project.id, chapterId);
     searchAbort.current?.abort();
     ++searchEpoch.current;
     setSearching(false);
@@ -597,15 +618,10 @@ export default function App() {
       await flush();
       abortRef.current?.abort();
       const p = await api<Project>("/projects/" + id);
-      const cache = localStorage.getItem("draft:" + id);
+      const cache = await draftCache.read(id);
       setCurrent(p);
       if (cache) {
-        let draft: Project;
-        try {
-          draft = JSON.parse(cache);
-        } catch {
-          return;
-        }
+        const draft = cache;
         setDialog({
           title: "发现未保存的草稿",
           description:
@@ -1162,6 +1178,21 @@ export default function App() {
       notify("已替换建议对应的原段落，可一次撤销恢复。");
     }catch(e){notify((e as Error).message);}
   };
+  const replaceAllReview = (runId:string) => {
+    if(generating||!editorRef.current||!pRef.current)return;
+    const run=pRef.current.aiRuns.find(r=>r.id===runId);
+    if(!run||run.chapterId!==chapterId||run.mode!=="review"){notify("审稿对应的章节已切换，请重新打开原章。");return;}
+    try{
+      const result=parseReviewResult(run.text);
+      if(!result)throw Error("这份审稿还没有完整改文，请先按审稿意见生成修改段落。");
+      const editor=editorRef.current;
+      const batch=replaceReviewParagraphs(editor.state,result.suggestions);
+      editor.view.dispatch(batch.transaction);
+      editor.view.dispatch(closeHistory(editor.state.tr));editor.view.focus();
+      edit(p=>{const record=p.aiRuns.find(r=>r.id===runId);if(record)record.accepted=true;});
+      notify(`已一键替换 ${batch.replaced} 段${batch.skipped?`，跳过 ${batch.skipped} 条已处理、无效或冲突建议`:""}，可一次撤销整批修改。`);
+    }catch(e){notify((e as Error).message);}
+  };
   const appliedRevisionIds = () => editorRef.current&&candidate?.revisionTasks ? revisionNotes(editorRef.current.state.doc).filter(n=>n.resolved&&candidate.revisionTasks!.some(t=>t.id===n.id)).map(n=>n.id) : [];
   const runDetection = async () => {
     if (!config?.detectorUrl?.trim()) { setPage("settings"); notify("请填写独立来源检测服务的完整地址并保存；正文模型地址不能代替检测接口。"); return; }
@@ -1314,6 +1345,7 @@ export default function App() {
           >
             {theme === "light" ? <Moon size={19} /> : <Sun size={19} />}
           </button>
+          <Button secondary onClick={()=>setSyncOpen(true)}>服务端同步</Button>
           <Button secondary onClick={() => importRef.current?.click()}>
             <Upload size={16} /> 导入项目
           </Button>
@@ -1392,7 +1424,7 @@ export default function App() {
         </div>
       )}
       <footer className="shelf-footer">
-        Yantai · 本地小说写作工作台 <span>v0.4.3 / 每次落笔，都有迹可循</span>
+        Yantai · 本地小说写作工作台 <span>v0.5.0 / 每次落笔，都有迹可循</span>
       </footer>
     </div>
   );
@@ -1468,7 +1500,7 @@ export default function App() {
           }),
         );
         setStorylineId(id);
-        localStorage.setItem("storyline:" + project!.id, id);
+        localSettings.setItem("storyline:" + project!.id, id);
       },
     });
   const addBeat = (lineId: string) =>
@@ -1517,7 +1549,7 @@ export default function App() {
           <div className="story-layout">
             <aside className="story-list" aria-label="故事线列表">
               <div className="eyebrow">故事线 · {project.storylines.length}</div>
-              {project.storylines.map((line) => <button key={line.id} className={selected?.id === line.id ? "selected" : ""} aria-pressed={selected?.id === line.id} aria-label={`查看故事线：${line.name}`} onClick={() => {setStorylineId(line.id);localStorage.setItem("storyline:" + project.id, line.id);}}>
+              {project.storylines.map((line) => <button key={line.id} className={selected?.id === line.id ? "selected" : ""} aria-pressed={selected?.id === line.id} aria-label={`查看故事线：${line.name}`} onClick={() => {setStorylineId(line.id);localSettings.setItem("storyline:" + project.id, line.id);}}>
                 <span className="line-color" style={{background: line.color}} />
                 <span className="story-list-label"><b>{line.name || "未命名故事线"}</b><small>{line.beats.length} 个节点</small></span>
                 <ChevronRight size={15} />
@@ -2146,6 +2178,7 @@ export default function App() {
             )}
           </div>
           <div>
+            <SyncSettings client={syncClient} />
             <ComfySettings config={config} onChange={comfy=>set({comfy})} onSaved={setConfig} notify={notify} />
             <div className="card">
               <div className="card-heading">
@@ -2221,6 +2254,7 @@ export default function App() {
                 项目 JSON 是完整的可恢复快照；TXT 和 Markdown 用于文稿交换。
               </p>
               <div className="inline">
+                <Button secondary onClick={()=>setSyncOpen(true)}>{syncClient.busy?"同步中……":"服务端同步"}</Button>
                 <Button secondary onClick={() => exportProject("json")}>
                   <Download size={15} /> 备份项目
                 </Button>
@@ -2634,7 +2668,7 @@ export default function App() {
           </div>
           {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} onLocate={locateSource} />}
           {candidate.mode === "revision" && <div className="candidate-text"><RevisionCandidate text={candidate.text} tasks={candidate.revisionTasks || []} complete={candidate.complete} retrying={candidate.retrying} appliedIds={appliedRevisionIds()} onReplace={replaceOneRevision} onLocate={locateSource}/></div>}
-          {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:<p className="muted">正在审稿并生成可替换的修改段落……</p>}</div>}
+          {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onReplaceAll={()=>replaceAllReview(candidate.id)} onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:<p className="muted">正在审稿并生成可替换的修改段落……</p>}</div>}
           {candidate.mode === "map" && candidate.complete && <SceneMapPreview text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
           <div className="candidate-text" hidden={candidate.mode === "revision" || candidate.mode === "review" || (candidate.mode === "map" && candidate.complete)}>
             {candidate.text ? <AIContent text={candidate.text} onLocate={locateSource} sourceText={chapter?.text} /> : <span className="muted">等待模型响应……</span>}
@@ -2664,7 +2698,7 @@ export default function App() {
           <small>{["review","map"].includes(candidate.mode) ? "完成的结果自动保存到项目，可在下方历史列表或审稿栏重新查看。" : "候选不会自动改正文。采纳前会检查正文是否已变化。"}</small>
         </div>
       )}
-      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} onSave={saveMapToImages} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
+      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory onReplaceAll={replaceAllReview} onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} onSave={saveMapToImages} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
       {!candidate && (
         <div className="small-empty">
           <Sparkles size={27} />
@@ -2747,7 +2781,7 @@ export default function App() {
           placeholder="命运的齿轮\n不禁陷入了沉思"
         />
       </div>
-      {project && chapter && <AIRunHistory onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} reviewsOnly onDownload={()=>{}} />}
+      {project && chapter && <AIRunHistory onReplaceAll={replaceAllReview} onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} reviewsOnly onDownload={()=>{}} />}
       <div className="review-section">
         <h4>AI 使用记录与来源检测</h4>
         <p>
@@ -2967,7 +3001,7 @@ export default function App() {
                 <Library size={17} /> 返回书架
               </button>
               <div className="local-indicator">
-                <span className="status-dot" /> 本地工作空间 <span>v0.4.3</span>
+                <span className="status-dot" /> 本地工作空间 <span>v0.5.0</span>
               </div>
             </div>
           </aside>
@@ -3211,6 +3245,7 @@ export default function App() {
           notify={notify}
         />
       )}
+      {syncOpen&&<div className="modal-overlay"><div className="modal wide"><button className="modal-close icon" aria-label="关闭服务端同步" onClick={()=>setSyncOpen(false)}><X size={20}/></button><SyncSettings client={syncClient}/></div></div>}
       {contextOpen && context && (
         <div className="modal-overlay">
           <div className="modal wide">

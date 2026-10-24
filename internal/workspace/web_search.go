@@ -18,7 +18,7 @@ func searchRSS(ctx context.Context, endpoint string) ([]SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Yantai/0.4.3")
+	req.Header.Set("User-Agent", "Yantai/0.5.0")
 	res, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return nil, errors.New("免密钥联网搜索连接失败，请稍后重试或在设置中配置 Brave Search")
