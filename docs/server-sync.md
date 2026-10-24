@@ -18,6 +18,27 @@ export YANTAI_SERVER_TOKEN='替换为至少16字符的随机访问密钥'
 
 程序内置 SQLite，无需 Node.js 或另装数据库。防火墙只需开放同步端口。systemd 模板见 `deploy/yantai.service`：建立 yantai 用户，程序放在 `/opt/yantai/Yantai-server`，数据目录 `/var/lib/yantai`，访问密钥放在 `/etc/yantai/server.env` 并限制读取权限。执行 `systemctl daemon-reload` 和 `systemctl enable --now yantai`。
 
+## systemd 服务安装与更新
+
+新版服务文件为 `deploy/yantai.service`，只启动 TLS 同步端口，不启用网页。systemd 自动创建 `/var/lib/yantai` 并归属 yantai 用户，目录权限 0700、文件默认权限 0600。自动生成的证书在 `/var/lib/yantai/tls`，更新时必须保留。
+
+首次安装需先创建 yantai 系统用户，安装程序至 `/opt/yantai/Yantai-server` 并赋予执行权限。建立 `/etc/yantai/server.env`，内容为 `YANTAI_SERVER_TOKEN=你的随机访问密钥`，将文件设为 root 所有、权限 0600。已部署的服务沿用原密钥与数据，不要重新生成或覆盖。
+
+在解压后的 Linux 发布目录执行：
+
+```sh
+sudo install -m 0644 deploy/yantai.service /etc/systemd/system/yantai.service
+sudo systemctl daemon-reload
+sudo systemctl enable yantai
+sudo systemctl restart yantai
+sudo systemctl status yantai --no-pager
+sudo journalctl -u yantai -n 30 --no-pager
+```
+
+日志中的 `TLS证书 SHA-256 指纹` 用于客户端核对。客户端填写 `https://服务器IP:48120`、原访问密钥和该指纹。公网端口访问没有网页是正常现象。
+
+从旧版升级时，还必须将程序替换为支持 TLS 专用同步的新版，单独更换服务文件不会改变旧程序行为。原服务如有自定义数据路径或端口，请同步调整 ExecStart；StateDirectory 和 ReadWritePaths 也需与实际数据目录一致。无需同时运行旧服务，也不要删除原数据目录。
+
 ## Windows Server amd64
 
 ```powershell

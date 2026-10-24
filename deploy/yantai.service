@@ -1,6 +1,7 @@
 [Unit]
-Description=Yantai writing and sync server
-After=network.target
+Description=Yantai TLS-only project sync server
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -8,7 +9,13 @@ User=yantai
 Group=yantai
 WorkingDirectory=/opt/yantai
 EnvironmentFile=/etc/yantai/server.env
+# -server enables TLS-only sync; no public web UI or login endpoint.
+# The certificate is generated once under /var/lib/yantai/tls and reused.
+# Do not add -web-listen here unless a separate loopback-only UI is needed.
 ExecStart=/opt/yantai/Yantai-server -server -listen 0.0.0.0:48120 -data /var/lib/yantai
+StateDirectory=yantai
+StateDirectoryMode=0700
+UMask=0077
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
