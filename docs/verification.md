@@ -272,3 +272,10 @@ ComfyUI 最终 Windows 桌面及浏览器程序构建完成，Windows 压缩包�
 - modernc.org/sqlite 升级 v1.34.5 → v1.46.2，SQLite 3.46.0 → 3.51.3，包含官方 WAL-reset 并发问题修复；Go 最低版本随依赖升级到 1.25。不能据此断定用户此次损坏的原因，升级不能恢复已损坏文件。
 - 新测试在隔离库保留 SQLite 文件头、破坏 schema b-tree 来复现损坏，覆盖客户端及服务端异常、书架可见、其他项目正常下载、明确上传/下载选择也不覆盖异常项目、健康原件和损坏证据字节不变；另验证服务端错误来源、实际 SQLite 版本及 quick_check。Go test ./...、go vet ./... 与前端生产构建通过。
 - 四个发布程序重新构建并确认使用 modernc.org/sqlite v1.46.2 与最终前端。桌面使用全新隔离目录完成原生启动/认证 API 初始化；Windows 实际 TLS 项目及 SVG 同步、指纹和明文拒绝回归通过；Linux 在 Ubuntu 22.04 实际完成内网网页登录及项目写入读取，并兼容原有测试数据。归档内容和 SHA256 校验通过。
+
+## v0.5.1 发布验证（2026-10-24）
+
+- npm 包和锁文件、桌面产品版本、两处界面版本、联网检索 User-Agent 及功能状态统一为 0.5.1，新增 docs/releases/v0.5.1.md；历史标签保留。
+- Go test ./...、go vet ./... 和前端生产构建通过，包含损坏项目隔离与原件保留回归。桌面、Windows 浏览器/服务端和 Linux 服务端重新构建，最终前端资源及 v0.5.1 在四个程序中核验一致。
+- 使用全新隔离目录验证最终原生桌面启动、认证 API 初始化；Windows ProductVersion、FileVersion 均为 0.5.1；服务端 API 与内嵌 v0.5.1 页面通过。Windows 实际 TLS 项目/SVG 同步与证书校验、Linux 实际内网 HTTP 登录及项目写入读取通过。
+- 生成 Yantai-v0.5.1-windows-amd64.zip、Yantai-server-v0.5.1-windows-amd64.zip、Yantai-server-v0.5.1-linux-amd64.tar.gz 和 SHA256 清单，校验程序内容、部署说明及 Linux 可执行权限。未包含小说数据、密钥、QA 目录或原始 workflow 文件。

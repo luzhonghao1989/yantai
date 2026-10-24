@@ -1424,7 +1424,7 @@ export default function App() {
         </div>
       )}
       <footer className="shelf-footer">
-        Yantai · 本地小说写作工作台 <span>v0.5.0 / 每次落笔，都有迹可循</span>
+        Yantai · 本地小说写作工作台 <span>v0.5.1 / 每次落笔，都有迹可循</span>
       </footer>
     </div>
   );
@@ -3001,7 +3001,7 @@ export default function App() {
                 <Library size={17} /> 返回书架
               </button>
               <div className="local-indicator">
-                <span className="status-dot" /> 本地工作空间 <span>v0.5.0</span>
+                <span className="status-dot" /> 本地工作空间 <span>v0.5.1</span>
               </div>
             </div>
           </aside>
