@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	_ "modernc.org/sqlite"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type ProjectInfo struct {
 	UpdatedAt   string `json:"updatedAt"`
 	Words       int    `json:"words"`
 	Chapters    int    `json:"chapters"`
+	Error       string `json:"error,omitempty"`
 }
 type HistoryEntry struct {
 	Revision  int64  `json:"revision"`
@@ -84,8 +86,12 @@ func (s *Store) Create(name string, demo bool) (Project, error) {
 	_, err = db.Exec(`INSERT INTO state VALUES(1,?,?)`, p.Revision, string(data))
 	return p, err
 }
-func (s *Store) Load(id string) (Project, error) {
-	var p Project
+func (s *Store) Load(id string) (p Project, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			resultErr = fmt.Errorf("项目 %s 读取失败：%w", id, resultErr)
+		}
+	}()
 	db, err := s.db(id, false)
 	if err != nil {
 		return p, err
@@ -152,13 +158,14 @@ func (s *Store) List() ([]ProjectInfo, error) {
 		}
 		p, err := s.Load(e.Name())
 		if err != nil {
-			return nil, err
+			out = append(out, ProjectInfo{ID: e.Name(), Name: "无法读取的项目", Error: err.Error()})
+			continue
 		}
 		n := 0
 		for _, c := range p.Chapters {
 			n += WordCount(c.Text)
 		}
-		out = append(out, ProjectInfo{p.ID, p.Name, p.Genre, p.Description, p.UpdatedAt, n, len(p.Chapters)})
+		out = append(out, ProjectInfo{ID: p.ID, Name: p.Name, Genre: p.Genre, Description: p.Description, UpdatedAt: p.UpdatedAt, Words: n, Chapters: len(p.Chapters)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
 	return out, nil

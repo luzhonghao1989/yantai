@@ -48,7 +48,7 @@ AI 来源检测需要自行配置支持中文的检测服务，结果不能证�
 
 ## 开发
 
-安装 Go 1.23 或更高版本、Node.js 与 Wails v2.10.2，然后运行 scripts/build.ps1。前端依赖通过 package-lock.json 固定，Go 依赖通过 go.mod 与 go.sum 固定。
+安装 Go 1.25 或更高版本、Node.js 与 Wails v2.10.2，然后运行 scripts/build.ps1。前端依赖通过 package-lock.json 固定，Go 依赖通过 go.mod 与 go.sum 固定。
 
 ```powershell
 ./scripts/build.ps1

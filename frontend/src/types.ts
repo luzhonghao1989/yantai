@@ -94,6 +94,7 @@ export type Project = {
 };
 export type ProjectImage = { id: string; name: string; kind: "map" | "character" | "scene" | "other"; note: string; sha?: string; mime?: string; data?: string; size: number; createdAt: string; sourceRunId?: string };
 export type ProjectInfo = {
+  error?: string;
   id: string;
   name: string;
   genre: string;

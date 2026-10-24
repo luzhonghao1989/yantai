@@ -33,6 +33,11 @@ type SyncEntry struct {
 type SyncManifest struct {
 	ServerID string      `json:"serverId"`
 	Projects []SyncEntry `json:"projects"`
+	Issues   []SyncIssue `json:"issues,omitempty"`
+}
+type SyncIssue struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
 }
 type SyncSnapshot struct {
 	Hash    string  `json:"hash"`
@@ -193,13 +198,19 @@ func (s *Store) syncManifest() (SyncManifest, error) {
 		return out, e
 	}
 	for _, entry := range list {
+		if entry.Error != "" {
+			out.Issues = append(out.Issues, SyncIssue{entry.ID, entry.Error})
+			continue
+		}
 		p, e := s.Load(entry.ID)
 		if e != nil {
-			return out, e
+			out.Issues = append(out.Issues, SyncIssue{entry.ID, e.Error()})
+			continue
 		}
 		h, e := syncHash(p)
 		if e != nil {
-			return out, e
+			out.Issues = append(out.Issues, SyncIssue{entry.ID, e.Error()})
+			continue
 		}
 		out.Projects = append(out.Projects, SyncEntry{p.ID, p.Name, h})
 	}
@@ -312,6 +323,12 @@ func syncRemote(ctx context.Context, cfg SyncSettings, method, path string, in, 
 		return errors.New("同步服务端访问密钥无效")
 	}
 	if res.StatusCode != 200 {
+		var detail struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&detail) == nil && detail.Error != "" {
+			return fmt.Errorf("服务端同步接口失败（HTTP %d）：%s", res.StatusCode, detail.Error)
+		}
 		return fmt.Errorf("同步服务端返回 HTTP %d", res.StatusCode)
 	}
 	if e = json.NewDecoder(io.LimitReader(res.Body, 64<<20)).Decode(out); e != nil {
@@ -368,12 +385,23 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 	}
 	local, e := s.List()
 	if e != nil {
-		return report, e
+		return report, fmt.Errorf("本机项目目录读取失败：%w", e)
+	}
+	blocked := map[string]string{}
+	for _, issue := range remote.Issues {
+		if !validID.MatchString(issue.ID) {
+			return report, errors.New("服务端异常项目标识无效")
+		}
+		blocked[issue.ID] = "服务端项目无法读取，已跳过且未覆盖：" + issue.Message
+		ids[issue.ID] = true
 	}
 	localIDs := map[string]bool{}
 	for _, p := range local {
 		localIDs[p.ID] = true
 		ids[p.ID] = true
+		if p.Error != "" {
+			blocked[p.ID] = "本机项目无法读取，已跳过且未覆盖：" + p.Error
+		}
 	}
 	choices := map[string]SyncResolution{}
 	for _, r := range resolutions {
@@ -397,6 +425,15 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 		lh := ""
 		name := r.Name
 		item := SyncItem{ID: id, Name: name}
+		if item.Name == "" {
+			item.Name = "项目 " + id
+		}
+		if message := blocked[id]; message != "" {
+			item.Action = "error"
+			item.Message = message
+			report.Items = append(report.Items, item)
+			continue
+		}
 		if hasLocal {
 			l, e = s.Load(id)
 			if e == nil {
@@ -404,7 +441,7 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 			}
 			if e != nil {
 				item.Action = "error"
-				item.Message = "本机项目读取失败"
+				item.Message = "本机项目读取失败：" + e.Error()
 				report.Items = append(report.Items, item)
 				continue
 			}
@@ -488,6 +525,9 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 			}
 			if err == nil {
 				_, err = s.applySync(snap.Project, lh)
+				if err != nil && !errors.Is(err, ErrConflict) {
+					err = fmt.Errorf("本机项目 %s 写入失败：%w", id, err)
+				}
 			}
 			if err != nil {
 				item.Action = "error"

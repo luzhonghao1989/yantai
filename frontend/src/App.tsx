@@ -1384,7 +1384,7 @@ export default function App() {
           <button
             className="book-card"
             key={b.id}
-            onClick={() => openProject(b.id)}
+            onClick={() => b.error ? notify(b.error + "；请先备份数据，勿直接覆盖此项目。") : openProject(b.id)}
           >
             <div className={"book-cover cover-" + (i % 4)}>
               <div className="cover-frame">
@@ -1396,7 +1396,7 @@ export default function App() {
             </div>
             <div className="book-info">
               <h3>{b.name}</h3>
-              <p>{b.description || "故事正在这里展开。"}</p>
+              <p>{b.error || b.description || "故事正在这里展开。"}</p>
               <div>
                 <span>
                   {b.chapters} 章 · {b.words.toLocaleString()} 字
