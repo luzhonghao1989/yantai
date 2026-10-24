@@ -258,3 +258,9 @@ ComfyUI 最终 Windows 桌面及浏览器程序构建完成，Windows 压缩包�
 
 - 服务描述明确为 TLS 专用同步，保留 -server 启动且不启用网页；说明自动证书目录与复用规则。增加 StateDirectory=yantai、0700 目录权限与 UMask=0077，确保 systemd 创建并授权数据目录。
 - 部署文档补充替换程序/服务文件、daemon-reload、restart、日志查看指纹及自定义路径迁移说明。Ubuntu 22.04 systemd-analyze verify 使用隔离副本并仅替换可执行路径后退出 0；宿主其他服务及挂载目录权限警告与此模板无关，归档内 service 权限为 0644。
+
+## 独立内网 HTTP 工作台（2026-10-24）
+
+- -web-listen 扩展为允许绑定具体内网 IP、IPv6 ULA 或回环 IP；默认仍关闭，不接受公网或通配监听地址。支持 YANTAI_WEB_LISTEN 环境变量，服务的 EnvironmentFile 可直接配置，无需更改 ExecStart。公网 TLS 同步端口不提供网页。
+- 网页端口检查实际连接来源，只允许内网/回环，不以转发头放行；保留访问密钥登录和同源校验，与同步端口共用 Store。测试覆盖私网地址、通配/公网拒绝、伪造转发头、内网登录与认证 API。
+- Go test ./...、go vet ./... 和 Windows/Linux 服务端构建通过。Windows 最终程序重新验证 TLS 端口空响应、证书指纹、项目与 SVG 同步。Linux 最终程序在 Ubuntu 22.04 实际绑定 WSL 内网 IP，通过环境变量启用 HTTP 页面，验证未登录拒绝、Cookie 登录、项目写入读取，使用独立测试数据。文档和服务注释已补充内网端口配置。

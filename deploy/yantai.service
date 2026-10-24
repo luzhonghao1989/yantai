@@ -11,7 +11,8 @@ WorkingDirectory=/opt/yantai
 EnvironmentFile=/etc/yantai/server.env
 # -server enables TLS-only sync; no public web UI or login endpoint.
 # The certificate is generated once under /var/lib/yantai/tls and reused.
-# Do not add -web-listen here unless a separate loopback-only UI is needed.
+# Optional LAN HTTP UI: set YANTAI_WEB_LISTEN=192.168.1.10:48121 in server.env.
+# Use a concrete private/loopback IP; never proxy this HTTP port to the Internet.
 ExecStart=/opt/yantai/Yantai-server -server -listen 0.0.0.0:48120 -data /var/lib/yantai
 StateDirectory=yantai
 StateDirectoryMode=0700

@@ -20,7 +20,7 @@ export YANTAI_SERVER_TOKEN='替换为至少16字符的随机访问密钥'
 
 ## systemd 服务安装与更新
 
-新版服务文件为 `deploy/yantai.service`，只启动 TLS 同步端口，不启用网页。systemd 自动创建 `/var/lib/yantai` 并归属 yantai 用户，目录权限 0700、文件默认权限 0600。自动生成的证书在 `/var/lib/yantai/tls`，更新时必须保留。
+新版服务文件为 `deploy/yantai.service`，只启动 TLS 同步端口，默认不启用网页。systemd 自动创建 `/var/lib/yantai` 并归属 yantai 用户，目录权限 0700、文件默认权限 0600。自动生成的证书在 `/var/lib/yantai/tls`，更新时必须保留。
 
 首次安装需先创建 yantai 系统用户，安装程序至 `/opt/yantai/Yantai-server` 并赋予执行权限。建立 `/etc/yantai/server.env`，内容为 `YANTAI_SERVER_TOKEN=你的随机访问密钥`，将文件设为 root 所有、权限 0600。已部署的服务沿用原密钥与数据，不要重新生成或覆盖。
 
@@ -48,11 +48,29 @@ $env:YANTAI_SERVER_TOKEN = '替换为至少16字符的随机访问密钥'
 
 同样自动生成证书并输出指纹。可用任务计划程序开机启动，为运行账户设置相同环境变量与数据目录。升级只替换程序，保留 data 和证书。
 
-## 可选本机网页
+## 独立内网 HTTP 网页端口
 
-默认完全不开启网页工作台。如需在服务器本机维护，增加 `-web-listen 127.0.0.1:48121`，在本机浏览器打开 `http://127.0.0.1:48121`，用访问密钥登录。该监听必须为独立回环地址，不能设置成公网或局域网地址，也不要反向代理到公网。需要远程临时维护时可通过 SSH 本地端口转发访问它。
+公网同步端口仍为 `48120`，仅提供 TLS 加密同步；内网网页使用另一个端口，例如 `48121`。两者共用同一数据目录与数据库，不需要启动第二个服务进程。
 
-不加 `-server` 仍是原有的本机浏览器版，只允许回环监听。
+启动参数示例（将 IP 改为服务器实际内网 IP）：
+
+```sh
+./Yantai-server -server -listen 0.0.0.0:48120 -web-listen 172.16.1.200:48121 -data /data/yantai/data
+```
+
+也可在 systemd 使用的 `/etc/yantai/server.env` 中增加一行：
+
+```ini
+YANTAI_WEB_LISTEN=172.16.1.200:48121
+```
+
+服务文件的 ExecStart 不需要再追加参数，程序会读取该环境变量；显式 `-web-listen` 参数优先。修改环境文件后执行 `sudo systemctl restart yantai`。若使用自定义 run.sh，则在脚本中 export 此环境变量，或直接添加 -web-listen 参数。
+
+内网电脑打开 `http://172.16.1.200:48121`，用同一个访问密钥登录，即可使用完整网页工作台。允许绑定具体的 RFC1918 内网 IP、IPv6 ULA 或本机回环地址；不接受公网 IP、通配地址 0.0.0.0/:: 或普通域名。程序还按实际连接来源限制内网/回环地址，不信任 X-Forwarded-For 等转发头作为放行依据。
+
+防火墙只向可信内网开放 48121，不做公网映射，也不要将该 HTTP 端口反向代理到公网。已有公网 Nginx 仍然只代理 `https://172.16.1.200:48120`。HTTP 网页仅用于可信内网，公网客户端始终通过 HTTPS 同步。
+
+不配置 web-listen 或 YANTAI_WEB_LISTEN 时网页关闭；仅本机使用可填写 `127.0.0.1:48121`。不加 -server 仍是原有本机浏览器版，只允许回环监听。
 
 ## 连接与加密
 

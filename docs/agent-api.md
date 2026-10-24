@@ -134,7 +134,7 @@ GET /api/projects/{id}/images/{imageId} 返回原图，需要同样的本机会�
 
 客户端本机接口新增 GET/PUT `/api/sync/settings` 与 POST `/api/sync/run`，受现有本地会话认证保护。settings 字段为 serverUrl、token、tlsFingerprint、hasToken、automatic、intervalMinutes，GET 不返回 token 明文。run 请求 `{ "resolutions": [] }`，返回逐项目 uploaded/downloaded/unchanged/conflict/error 结果；冲突项可携带 id、direction（upload/download）、localHash、remoteHash 重试，内容已变化则不覆盖。
 
-远程服务端使用 `-server` 及环境变量 YANTAI_SERVER_TOKEN，Bearer 认证后可访问 GET `/api/sync/manifest`、GET/PUT `/api/sync/projects/{id}`。PUT 需要 `{ "expectedHash": "目标端当前校验值；新项目为空", "project": { ...完整含图片项目... } }`。项目 ID 保持不变，校验冲突返回 409。可选本机网页端口的浏览器通过 POST `/api/auth/login` 的 token 登录并获得会话 Cookie，公网同步端口不提供该接口；配置文件与同步密钥不属于项目同步内容。
+远程服务端使用 `-server` 及环境变量 YANTAI_SERVER_TOKEN，Bearer 认证后可访问 GET `/api/sync/manifest`、GET/PUT `/api/sync/projects/{id}`。PUT 需要 `{ "expectedHash": "目标端当前校验值；新项目为空", "project": { ...完整含图片项目... } }`。项目 ID 保持不变，校验冲突返回 409。可选内网 HTTP 网页端口的浏览器通过 POST `/api/auth/login` 的 token 登录并获得会话 Cookie，公网同步端口不提供该接口；配置文件与同步密钥不属于项目同步内容。
 
 
 公网同步入口仅暴露 GET /api/sync/manifest、GET/PUT /api/sync/projects/{id}，要求 TLS 与 Bearer 访问密钥。不提供登录、配置、Agent API 或网页，其他请求为空 404。GET/PUT /api/sync/settings、POST /api/sync/run 仅在本机客户端使用；同步配置新增 tlsFingerprint，可填 SHA-256 证书指纹，serverUrl 必须为无路径的 HTTPS 地址。私有证书指纹从服务端终端核对后填写，留空时按系统 CA 和域名验证。
