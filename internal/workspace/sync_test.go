@@ -2,7 +2,9 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,13 +17,14 @@ import (
 
 const syncTestKey = "fixture-server-secret-not-production"
 
-func syncTestClient(t *testing.T, url string) *Store {
+func syncTestClient(t *testing.T, server *httptest.Server) *Store {
 	t.Helper()
 	s, e := NewStore(t.TempDir())
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = s.SaveSyncSettings(SyncSettings{ServerURL: url, Token: syncTestKey, IntervalMinutes: 5})
+	digest := sha256.Sum256(server.Certificate().Raw)
+	_, e = s.SaveSyncSettings(SyncSettings{ServerURL: server.URL, Token: syncTestKey, TLSFingerprint: hex.EncodeToString(digest[:]), IntervalMinutes: 5})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -54,10 +57,10 @@ func syncEdit(t *testing.T, s *Store, id, text string) Project {
 }
 func TestSyncTwoClientsAndServer(t *testing.T) {
 	remote, _ := NewStore(t.TempDir())
-	server := httptest.NewServer((&Server{Store: remote, Remote: true, AuthKey: syncTestKey}).Handler())
+	server := httptest.NewTLSServer((&Server{Store: remote, Remote: true, AuthKey: syncTestKey}).SyncHandler())
 	defer server.Close()
-	a := syncTestClient(t, server.URL)
-	b := syncTestClient(t, server.URL)
+	a := syncTestClient(t, server)
+	b := syncTestClient(t, server)
 	p, _ := a.Create("同步测试", true)
 	p = syncEdit(t, a, p.ID, "电脑A第一稿")
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5"/></svg>`
@@ -123,9 +126,9 @@ func TestSyncTwoClientsAndServer(t *testing.T) {
 }
 func TestSyncFirstConflictAndCAS(t *testing.T) {
 	remote, _ := NewStore(t.TempDir())
-	server := httptest.NewServer((&Server{Store: remote, Remote: true, AuthKey: syncTestKey}).Handler())
+	server := httptest.NewTLSServer((&Server{Store: remote, Remote: true, AuthKey: syncTestKey}).SyncHandler())
 	defer server.Close()
-	a := syncTestClient(t, server.URL)
+	a := syncTestClient(t, server)
 	p, _ := a.Create("初次冲突", true)
 	p = syncEdit(t, a, p.ID, "本机版本")
 	var copy Project

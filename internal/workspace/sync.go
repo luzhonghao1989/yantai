@@ -15,12 +15,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 type SyncSettings struct {
 	ServerURL       string `json:"serverUrl"`
 	Token           string `json:"token"`
+	TLSFingerprint  string `json:"tlsFingerprint"`
 	HasToken        bool   `json:"hasToken"`
 	Automatic       bool   `json:"automatic"`
 	IntervalMinutes int    `json:"intervalMinutes"`
@@ -90,20 +90,33 @@ func (s *Store) SyncSettings() (SyncSettings, error) {
 	e := readSyncJSON(filepath.Join(s.Root, "sync-settings.json"), &v)
 	return v, e
 }
-func (s *Store) SaveSyncSettings(v SyncSettings) (SyncSettings, error) {
+func validateSyncSettings(v *SyncSettings) error {
 	u, e := url.Parse(strings.TrimSpace(v.ServerURL))
-	if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return v, errors.New("请输入有效的 HTTP/HTTPS 服务端地址，不含用户名、查询参数或片段")
+	if e != nil || u.Host == "" || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return errors.New("同步必须使用 HTTPS 加密地址，不含路径、用户名、查询参数或片段")
+	}
+	v.ServerURL = strings.TrimRight(u.String(), "/")
+	v.TLSFingerprint = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(v.TLSFingerprint), ":", ""))
+	if v.TLSFingerprint != "" {
+		b, err := hex.DecodeString(v.TLSFingerprint)
+		if err != nil || len(b) != sha256.Size {
+			return errors.New("证书指纹须为 SHA-256 的64位十六进制字符")
+		}
+	}
+	return nil
+}
+func (s *Store) SaveSyncSettings(v SyncSettings) (SyncSettings, error) {
+	if e := validateSyncSettings(&v); e != nil {
+		return v, e
 	}
 	if v.IntervalMinutes < 1 || v.IntervalMinutes > 10080 {
 		return v, errors.New("定时同步间隔须为 1 至 10080 分钟")
 	}
-	v.ServerURL = strings.TrimRight(u.String(), "/")
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	if v.Token == "" && v.HasToken {
 		var old SyncSettings
-		if e = readSyncJSON(filepath.Join(s.Root, "sync-settings.json"), &old); e != nil {
+		if e := readSyncJSON(filepath.Join(s.Root, "sync-settings.json"), &old); e != nil {
 			return v, e
 		}
 		v.Token = old.Token
@@ -112,7 +125,7 @@ func (s *Store) SaveSyncSettings(v SyncSettings) (SyncSettings, error) {
 		return v, errors.New("请填写服务端访问密钥，至少16字符")
 	}
 	v.HasToken = false
-	e = writeSyncJSON(filepath.Join(s.Root, "sync-settings.json"), v)
+	e := writeSyncJSON(filepath.Join(s.Root, "sync-settings.json"), v)
 	return v, e
 }
 func publicSyncSettings(v SyncSettings) SyncSettings {
@@ -282,7 +295,11 @@ func syncRemote(ctx context.Context, cfg SyncSettings, method, path string, in, 
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client, e := syncHTTPClient(cfg)
+	if e != nil {
+		return e
+	}
+	defer client.CloseIdleConnections()
 	res, e := client.Do(req)
 	if e != nil {
 		return errors.New("无法连接同步服务端，请检查地址、网络和证书")
@@ -314,6 +331,9 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 	}
 	if cfg.ServerURL == "" || cfg.Token == "" {
 		return SyncReport{}, errors.New("请先保存服务端地址和访问密钥")
+	}
+	if e = validateSyncSettings(&cfg); e != nil {
+		return SyncReport{}, e
 	}
 	report := SyncReport{StartedAt: Now(), ServerURL: cfg.ServerURL, Items: []SyncItem{}}
 	var remote SyncManifest
@@ -549,6 +569,10 @@ func (s *Server) registerSync(mux *http.ServeMux) {
 		}
 		reply(w, 200, out)
 	})
+	s.registerSyncRemote(mux)
+}
+
+func (s *Server) registerSyncRemote(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sync/manifest", func(w http.ResponseWriter, r *http.Request) {
 		if !s.Remote {
 			fail(w, errors.New("目标未启用服务端模式"))
