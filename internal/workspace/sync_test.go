@@ -215,3 +215,57 @@ func TestServerAuthenticationAndOrigin(t *testing.T) {
 		t.Fatal("local mode exposed to network host")
 	}
 }
+
+func TestDeletedGeneratedImagesSyncAndHistoryRestore(t *testing.T) {
+	remote, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer((&Server{Store: remote, Remote: true, AuthKey: syncTestKey}).SyncHandler())
+	defer server.Close()
+	a, b := syncTestClient(t, server), syncTestClient(t, server)
+	p, err := a.Create("图片删除", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := ID()
+	data := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`))
+	p.Images = []ProjectImage{{ID: ID(), Name: "生成地图.svg", Kind: "map", SourceRunID: runID, Data: data}, {ID: ID(), Name: "同文件参考.svg", Kind: "other", Data: data}}
+	p.AIRuns = []AIRun{{ID: runID, ChapterID: p.Chapters[0].ID, Mode: "map", Text: "地图记录", CreatedAt: Now()}, {ID: ID(), ChapterID: p.Chapters[0].ID, Mode: "review", Text: "保留审稿", CreatedAt: Now()}}
+	p, err = a.Save(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, deletedID, sharedSHA := p.Revision, p.Images[0].ID, p.Images[1].SHA
+	runSyncTest(t, a, "uploaded")
+	runSyncTest(t, b, "downloaded")
+	p.Images, p.AIRuns = p.Images[1:], p.AIRuns[1:]
+	p, err = a.Save(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSyncTest(t, a, "uploaded")
+	runSyncTest(t, b, "downloaded")
+	for _, store := range []*Store{a, b, remote} {
+		got, err := store.Load(p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Images) != 1 || got.Images[0].ID == deletedID || len(got.AIRuns) != 1 || got.AIRuns[0].Mode != "review" {
+			t.Fatal("deleted image/map returned or unrelated reference lost")
+		}
+		if _, err := os.Stat(filepath.Join(store.Root, "images", sharedSHA)); err != nil {
+			t.Fatal("shared image blob lost", err)
+		}
+	}
+	p, err = a.Restore(p.ID, revision, p.Revision)
+	if err != nil || len(p.Images) != 2 {
+		t.Fatal("image history restoration failed", err)
+	}
+	runSyncTest(t, a, "uploaded")
+	runSyncTest(t, b, "downloaded")
+	restored, err := b.Load(p.ID)
+	if err != nil || len(restored.Images) != 2 || len(restored.AIRuns) != 2 {
+		t.Fatal("restored image history failed to sync", err)
+	}
+}

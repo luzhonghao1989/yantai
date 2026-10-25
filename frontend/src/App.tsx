@@ -957,6 +957,26 @@ export default function App() {
     const image: ProjectImage = { id:uid(),name,kind:"map",note:"AI 生成的场景平面示意，请结合设定核对。",sourceRunId,size:bytes.length,createdAt:new Date().toISOString(),mime:"image/svg+xml",data:"data:image/svg+xml;base64,"+btoa(Array.from(bytes,b=>String.fromCharCode(b)).join("")) };
     edit(p=>{p.images=[...(p.images||[]),image];});
   };
+  const deleteImage = (target: { id?: string; sourceRunId?: string; name: string }, onDeleted?: () => void) => {
+    const projectId = pRef.current?.id;
+    if (!projectId) return;
+    setDialog({
+      title: "删除图片", fields: [], button: "删除图片",
+      description: `确定删除“${target.name}”？${pRef.current?.aiRuns.some(r => r.id === target.sourceRunId && r.mode === "map") ? "对应的 SVG 地图生成记录也会移除。" : ""}删除会随项目同步；已保存的图片可通过项目历史恢复。`,
+      submit: async () => {
+        if (pRef.current?.id !== projectId) throw Error("项目已切换，请在原项目删除图片");
+        edit(p => {
+          p.images = (p.images || []).filter(i => target.id ? i.id !== target.id : i.sourceRunId !== target.sourceRunId);
+          if (target.sourceRunId) p.aiRuns = p.aiRuns.filter(r => r.id !== target.sourceRunId || r.mode !== "map");
+        });
+        await flush();
+        setCandidate(current => current?.projectId === projectId && current.mode === "map" && current.id === target.sourceRunId ? null : current);
+        onDeleted?.();
+        notify("图片已删除并保存");
+      },
+    });
+  };
+  const deleteMap = (id: string) => deleteImage({ sourceRunId: id, name: "场景平面图（SVG）" });
   const previewContext = async () => {
     try {
       await flush();
@@ -2618,7 +2638,7 @@ export default function App() {
           <option value="comfyui">场景绘制（ComfyUI）</option>
         </select>
       </Field>
-      {mode === "comfyui" && project && chapter && <ComfyImagePanel key={project.id+chapter.id} config={config} project={project} chapter={chapter} onSettings={()=>setPage("settings")} onPrepare={async()=>{
+      {mode === "comfyui" && project && chapter && <ComfyImagePanel key={project.id+chapter.id} config={config} project={project} chapter={chapter} onDelete={deleteImage} onSettings={()=>setPage("settings")} onPrepare={async()=>{
         await flush();
         if(pRef.current?.id!==project.id || activeChapterRef.current!==chapter.id)throw Error("项目或章节已切换，请在当前章节重新生成");
         return {revision:pRef.current.revision,signature:contextSignature(pRef.current)};
@@ -2699,7 +2719,7 @@ export default function App() {
           {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} onLocate={locateSource} />}
           {candidate.mode === "revision" && <div className="candidate-text"><RevisionCandidate text={candidate.text} tasks={candidate.revisionTasks || []} complete={candidate.complete} retrying={candidate.retrying} appliedIds={appliedRevisionIds()} onReplace={replaceOneRevision} onLocate={locateSource}/></div>}
           {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onReplaceAll={()=>replaceAllReview(candidate.id)} onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:<p className="muted">正在审稿并生成可替换的修改段落……</p>}</div>}
-          {candidate.mode === "map" && candidate.complete && <SceneMapPreview text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
+          {candidate.mode === "map" && candidate.complete && <SceneMapPreview onDelete={()=>deleteMap(candidate.id)} text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
           <div className="candidate-text" hidden={candidate.mode === "revision" || candidate.mode === "review" || (candidate.mode === "map" && candidate.complete)}>
             {candidate.text ? <AIContent text={candidate.text} onLocate={locateSource} sourceText={chapter?.text} /> : <span className="muted">等待模型响应……</span>}
           </div>
@@ -2728,7 +2748,7 @@ export default function App() {
           <small>{["review","map"].includes(candidate.mode) ? "完成的结果自动保存到项目，可在下方历史列表或审稿栏重新查看。" : "候选不会自动改正文。采纳前会检查正文是否已变化。"}</small>
         </div>
       )}
-      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory onReplaceAll={replaceAllReview} onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} onSave={saveMapToImages} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
+      {project && chapter && project.aiRuns.some(r=>r.chapterId===chapterId && ["review","map"].includes(r.mode)) && <details className="review-section" open={!candidate}><summary>本章审稿与地图历史 · 本地保存</summary><AIRunHistory onReplaceAll={replaceAllReview} onLocate={locateSource} key={project.id+chapter.id} runs={project.aiRuns} chapterId={chapterId} text={chapter.text} document={editorRef.current?.state.doc} busy={generating} onReplace={replaceOneReview} onGenerate={run=>runAI("review",run.text)} onSave={saveMapToImages} onDeleteMap={deleteMap} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} /></details>}
       {!candidate && (
         <div className="small-empty">
           <Sparkles size={27} />
@@ -3251,7 +3271,7 @@ export default function App() {
             ) : page === "settings" ? (
               renderSettings()
             ) : page === "images" ? (
-              <ImageLibrary key={project.id} project={project} edit={edit} notify={notify} onDownload={download} />
+              <ImageLibrary onDelete={deleteImage} key={project.id} project={project} edit={edit} notify={notify} onDownload={download} />
             ) : (
               renderLore()
             )}

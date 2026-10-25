@@ -3,7 +3,7 @@ import { api, boundEntities, type Chapter, type Config, type Project, type Proje
 
 type ScenePrompt = { title: string; description: string; prompt: string; negativePrompt: string };
 
-export default function ComfyImagePanel({config,project,chapter,onSettings,onPrepare,onCheck,onImages}:{config:Config|null;project:Project;chapter:Chapter;onSettings:()=>void;onPrepare:()=>Promise<{revision:number;signature:string}>;onCheck:(signature:string)=>void;onImages:(images:ProjectImage[])=>Promise<void>}){
+export default function ComfyImagePanel({config,project,chapter,onSettings,onPrepare,onCheck,onImages,onDelete}:{onDelete:(image:ProjectImage,onDeleted:()=>void)=>void;config:Config|null;project:Project;chapter:Chapter;onSettings:()=>void;onPrepare:()=>Promise<{revision:number;signature:string}>;onCheck:(signature:string)=>void;onImages:(images:ProjectImage[])=>Promise<void>}){
   const [requirements,setRequirements]=useState(""),[generated,setGenerated]=useState<ScenePrompt|null>(null),[seed,setSeed]=useState(""),[entityId,setEntityId]=useState(""),[kind,setKind]=useState<ProjectImage["kind"]>("scene");
   const [busy,setBusy]=useState(false),[status,setStatus]=useState(""),[images,setImages]=useState<ProjectImage[]>([]),[saved,setSaved]=useState(false);
   const abort=useRef<AbortController|null>(null);
@@ -52,7 +52,7 @@ export default function ComfyImagePanel({config,project,chapter,onSettings,onPre
     <div className="inline"><button className="btn" disabled={busy||!chapter.text.trim()} onClick={()=>void run()}>{busy?"生成中……":"根据本章生成场景图"}</button>{busy?<button className="btn secondary" onClick={()=>abort.current?.abort()}>停止</button>:<button className="text-button" onClick={onSettings}>生图设置</button>}</div>
     {status&&<p className="info-note" role="status">{status}</p>}
     {generated&&<details className="comfy-workflow-editor"><summary>查看 AI 生成的提示词 · {generated.title}</summary><p className="muted">{generated.description}</p><label>正向提示词<textarea aria-label="AI 生成的正向提示词" rows={6} readOnly value={generated.prompt}/></label><label>负向提示词<textarea aria-label="AI 生成的负向提示词" rows={2} readOnly value={generated.negativePrompt}/></label></details>}
-    {images.map(image=><figure key={image.id}><img src={image.data} alt={image.name}/><figcaption>{image.name}</figcaption></figure>)}
+    {images.filter(image=>!saved || (project.images||[]).some(old=>old.id===image.id)).map(image=><figure key={image.id}><img src={image.data} alt={image.name}/><figcaption>{image.name}</figcaption><button className="text-button image-delete" disabled={busy} onClick={()=>onDelete(image,()=>{setImages(current=>current.filter(i=>i.id!==image.id));setStatus("图片已删除");})}>删除生成图片</button></figure>)}
     {!!images.length&&!saved&&!busy&&<button className="btn" onClick={()=>void save(images).catch(e=>setStatus(e.message))}>重试保存到图片栏</button>}
   </section>;
 }
