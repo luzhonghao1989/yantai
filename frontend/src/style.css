@@ -993,13 +993,14 @@ a:hover {
   margin-top: 35px;
 }
 .editor-status {
-  height: 34px;
+  min-height: 34px;
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: 9px;
   color: var(--muted);
-  padding: 0 21px;
+  padding: 5px 21px;
   border-top: 1px solid var(--line);
   background: var(--surface);
   gap: 15px;
@@ -2346,3 +2347,7 @@ a:hover {
 .image-library-card .image-delete { margin-top:10px; }
 .image-delete { color:var(--danger, #b74242); }
 .comfy-image-panel figcaption { overflow-wrap:anywhere; margin:8px 0; }
+
+.editor-status-actions { display:flex; align-items:center; gap:12px; margin-left:auto; white-space:nowrap; }
+.editor-back-top { display:inline-flex; align-items:center; gap:4px; padding:3px 6px; border:0; border-radius:4px; background:transparent; color:var(--muted); font:inherit; cursor:pointer; }
+.editor-back-top:hover, .editor-back-top:focus-visible { background:var(--green-soft); color:var(--green); }

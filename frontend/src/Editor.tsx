@@ -19,6 +19,7 @@ import {
   Search,
   ListFilter,
   MessageSquareText,
+  ArrowUpToLine,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Chapter, Doc } from "./types";
@@ -280,9 +281,12 @@ export default function WritingEditor({
           <span className="muted">· 不含空白，含标点</span>
           <span title="仅统计汉字、字母和数字，不含空白、标点和符号"> · 纯字数 {pureCount.toLocaleString()} 字</span>
         </span>
-        <span>
-          Ctrl + S 保存 <span className="muted">/</span> Ctrl + Z 撤销
-        </span>
+        <div className="editor-status-actions">
+          <span>Ctrl + S 保存 <span className="muted">/</span> Ctrl + Z 撤销</span>
+          <button type="button" className="editor-back-top" title="返回正文顶部" onClick={() => paperScroll.current?.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })}>
+            <ArrowUpToLine size={13} aria-hidden="true" />返回顶部
+          </button>
+        </div>
       </div>
     </div>
   );
