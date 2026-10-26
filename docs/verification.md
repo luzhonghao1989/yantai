@@ -317,3 +317,10 @@ ComfyUI 最终 Windows 桌面及浏览器程序构建完成，Windows 压缩包�
 - 前端生产构建通过。使用隔离项目两卷 80 章实测：选中第 80 章、折叠第二卷、返回书架并重新打开，正文恢复“这是第 80 章的正文”，第二卷 aria-expanded=true，当前章 aria-current=page，目录滚动到 3073，所选行完整位于目录可见范围。截图 screenshots/current-chapter-follow-v051.png。
 - 桌面、Windows 浏览器/服务端和 Linux 服务端重新构建；全新隔离数据目录原生启动、认证 API 和 0.5.1 文件版本检查通过。仅使用测试项目，未修改用户小说数据。
 - 四个程序内嵌最终前端 index-Ky5L7EwE.js 核验一致，三个发布归档与 SHA256 清单校验通过。
+
+## v0.5.2 发布验证（2026-10-26）
+
+- npm 包与锁文件、桌面产品版本、两处界面版本、联网检索 User-Agent、README 和功能状态统一为 0.5.2，新增 docs/releases/v0.5.2.md。包含目录跟随、返回顶部、图片删除、并发保存/草稿副本处理和本机副本恢复。
+- 前端生产构建、Node 三方合并/草稿缓存回归、go test ./... 和 go vet ./... 通过。目录跟随已在两卷 80 章隔离项目验证，相关截图保留在 current-chapter-follow-v051.png。
+- 重新构建 Windows 桌面、Windows 浏览器/服务端和 Linux amd64 服务端，四个程序内嵌最终前端 index-DD95mrdq.js。全新隔离数据目录验证原生桌面及认证 API 初始化，Windows ProductVersion/FileVersion 均为 0.5.2；最终服务端 API 与内嵌 v0.5.2 页面通过。
+- 生成并核验 Yantai-v0.5.2-windows-amd64.zip、Yantai-server-v0.5.2-windows-amd64.zip、Yantai-server-v0.5.2-linux-amd64.tar.gz 与 SHA256 清单。压缩包不包含用户小说、密钥或 QA 数据，Linux 可执行文件权限为 0755。已有历史版本标签保留不改。
