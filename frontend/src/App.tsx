@@ -422,6 +422,25 @@ export default function App() {
     activeStageId = stage?.id || project?.stages[0]?.id || "";
   const activeChapterRef = useRef(chapterId);
   activeChapterRef.current = chapterId;
+  const chapterTreeRef = useRef<HTMLDivElement>(null), selectedChapterRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (shelf || page !== "write" || focus || !chapter?.volumeId) return;
+    const volumeId = chapter.volumeId;
+    setCollapsed(current => current.includes(volumeId) ? current.filter(id => id !== volumeId) : current);
+  }, [shelf, page, focus, project?.id, chapterId, chapter?.volumeId, editorEpoch]);
+  useEffect(() => {
+    if (shelf || page !== "write" || focus) return;
+    const frame = requestAnimationFrame(() => {
+      const tree = chapterTreeRef.current, row = selectedChapterRowRef.current;
+      if (!tree || !row) return;
+      const viewport = tree.getBoundingClientRect(), item = row.getBoundingClientRect();
+      const top = viewport.top + tree.clientTop, bottom = top + tree.clientHeight;
+      if (item.top < top || item.bottom > bottom) {
+        tree.scrollTo({ top: Math.max(0, tree.scrollTop + item.top - top - (tree.clientHeight - item.height) / 2), behavior: "instant" });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [shelf, page, focus, project?.id, chapterId, chapter?.volumeId, editorEpoch, collapsed]);
   const notify = useCallback((s: string) => {
     setToast(s);
   }, []);
@@ -3028,7 +3047,7 @@ export default function App() {
                 </button>
               ))}
             </nav>
-            <div className="chapter-tree">
+            <div className="chapter-tree" ref={chapterTreeRef}>
               <div className="tree-heading">
                 <span>卷与章节</span>
                 <button className="icon" title="新建卷" onClick={addVolume}>
@@ -3040,6 +3059,7 @@ export default function App() {
                   <div className="volume-heading">
                     <button
                       className="volume-toggle"
+                      aria-expanded={!collapsed.includes(v.id)}
                       onClick={() =>
                         setCollapsed(
                           collapsed.includes(v.id)
@@ -3073,8 +3093,10 @@ export default function App() {
                             (chapterId === c.id ? "selected" : "")
                           }
                           key={c.id}
+                          ref={chapterId === c.id ? selectedChapterRowRef : undefined}
+                          data-chapter-id={c.id}
                         >
-                          <button onClick={() => changeChapter(c.id)}>
+                          <button aria-current={chapterId === c.id ? "page" : undefined} onClick={() => changeChapter(c.id)}>
                             <FileText size={14} />
                             <span>{c.title}</span>
                           </button>
