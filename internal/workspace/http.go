@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Server struct {
@@ -40,6 +42,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerAIErrorLog(mux)
 	s.registerImages(mux)
 	s.registerComfy(mux)
 	s.registerScenePrompt(mux)
@@ -296,7 +299,11 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		if !cp.Fits {
-			fail(w, errors.New("上下文超出模型窗口，请调整后重试"))
+			budgetError := modelFailure("context_limit", fmt.Sprintf("预估输入 %d token 超过可用输入预算 %d（上下文窗口 %d，输出预留 %d）。请核对模型与设置中的实际窗口容量，或减少本次上下文", cp.EstimatedTokens, cp.Budget, cfg.ContextLimit, cfg.OutputLimit))
+			if logErr := s.Store.recordAIError(newAIErrorRecord(cfg, cp, in.Mode, time.Now(), modelStreamStats{HTTPStatus: 400}, budgetError)); logErr != nil {
+				log.Printf("Yantai AI error log write failed: %v", logErr)
+			}
+			fail(w, budgetError)
 			return
 		}
 		if cfg.Model == "" {

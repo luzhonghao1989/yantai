@@ -84,6 +84,8 @@ func TestThinkingProviderStreams(t *testing.T) {
 					}
 					if provider == "compatible" {
 						fmt.Fprint(w, "data: [DONE]\n\n")
+					} else {
+						fmt.Fprintln(w, `{"done":true,"done_reason":"stop"}`)
 					}
 				}))
 				defer server.Close()

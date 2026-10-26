@@ -8,15 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type AIConfig struct {
+	RequestTimeoutMinutes int `json:"requestTimeoutMinutes"`
+	IdleTimeoutMinutes    int `json:"idleTimeoutMinutes"`
+	logFailure            func(AIErrorRecord) error
+
 	Comfy          ComfyConfig `json:"comfy"`
 	EmbeddingModel string      `json:"embeddingModel"`
 	Provider       string      `json:"provider"`
@@ -35,10 +41,11 @@ type AIConfig struct {
 }
 
 func DefaultConfig() AIConfig {
-	return AIConfig{Provider: "ollama", BaseURL: "http://127.0.0.1:11434", ContextLimit: 16384, OutputLimit: 2048, Temperature: 0.7}
+	return AIConfig{IdleTimeoutMinutes: 10, Provider: "ollama", BaseURL: "http://127.0.0.1:11434", ContextLimit: 16384, OutputLimit: 2048, Temperature: 0.7}
 }
 func (s *Store) Config() (AIConfig, error) {
 	cfg := DefaultConfig()
+	cfg.logFailure = s.recordAIError
 	b, err := os.ReadFile(filepath.Join(s.Root, "settings.json"))
 	if os.IsNotExist(err) {
 		return cfg, nil
@@ -50,6 +57,11 @@ func (s *Store) Config() (AIConfig, error) {
 	return cfg, err
 }
 func ValidateConfig(c AIConfig) error {
+	for _, minutes := range []int{c.RequestTimeoutMinutes, c.IdleTimeoutMinutes} {
+		if minutes < 0 || int64(minutes) > int64((1<<63-1)/time.Minute) {
+			return errors.New("超时须为非负整数分钟，0 表示不限制；数值不能超过系统时长范围")
+		}
+	}
 	if err := validateComfyConfig(c.Comfy, false); err != nil {
 		return err
 	}
@@ -186,7 +198,21 @@ func Generate(ctx context.Context, cfg AIConfig, cp ContextPackage, mode string,
 }
 
 // Thinking is ephemeral progress; only formal answer text is returned or saved.
-func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, mode string, emit, thinking func(string) error) (string, error) {
+func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, mode string, emit, thinking func(string) error) (text string, err error) {
+	started := time.Now()
+	stats := modelStreamStats{}
+	defer func() {
+		if err != nil && cfg.logFailure != nil {
+			record := newAIErrorRecord(cfg, cp, mode, started, stats, err)
+			if logErr := cfg.logFailure(record); logErr != nil {
+				log.Printf("Yantai AI error log write failed: %v", logErr)
+			}
+		}
+	}()
+	return generateWithTimeouts(ctx, cfg, cp, mode, emit, thinking, time.Duration(cfg.IdleTimeoutMinutes)*time.Minute, time.Duration(cfg.RequestTimeoutMinutes)*time.Minute, &stats)
+}
+
+func generateWithTimeouts(ctx context.Context, cfg AIConfig, cp ContextPackage, mode string, emit, thinking func(string) error, idleTimeout, totalTimeout time.Duration, stats *modelStreamStats) (string, error) {
 	if cfg.Model == "" {
 		return "", errors.New("请在模型设置中填写模型名称")
 	}
@@ -240,27 +266,53 @@ func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, 
 		payload = map[string]any{"model": cfg.Model, "messages": messages, "stream": true, "options": map[string]any{"temperature": cfg.Temperature, "num_predict": cfg.OutputLimit, "num_ctx": cfg.ContextLimit}}
 	}
 	body, _ := json.Marshal(payload)
+	// Generation can exceed ten minutes with local models. Reset the deadline
+	// on transport activity (including thinking and heartbeat bytes), not elapsed time.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var idle, total *time.Timer
+	if idleTimeout > 0 {
+		idle = time.AfterFunc(idleTimeout, func() { cancel(errModelIdleTimeout) })
+		defer idle.Stop()
+	}
+	if totalTimeout > 0 {
+		total = time.AfterFunc(totalTimeout, func() { cancel(errModelTotalTimeout) })
+		defer total.Stop()
+	}
 	req, err := makeRequest(ctx, "POST", endpoint(cfg, path), cfg.APIKey, body)
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{}
 	res, err := client.Do(req)
 	if err != nil {
-		return "", errors.New("模型请求未完成，请检查服务或取消状态")
+		return "", modelStreamError(ctx, err, idleTimeout, totalTimeout)
 	}
 	defer res.Body.Close()
+	stats.HTTPStatus = res.StatusCode
 	if res.StatusCode >= 300 {
-		return "", fmt.Errorf("模型返回 HTTP %d，请检查模型名称、密钥和接口", res.StatusCode)
+		return "", modelHTTPError(res, cfg.APIKey)
 	}
-	scanner := bufio.NewScanner(res.Body)
+	scanner := bufio.NewScanner(modelActivityReader{Reader: res.Body, activity: func() {
+		if idle != nil {
+			idle.Reset(idleTimeout)
+		}
+	}})
 	scanner.Buffer(make([]byte, 4096), 4<<20)
 	var out strings.Builder
 	stream := thinkingStream{answer: func(part string) error {
+		stats.AnswerCharacters += utf8.RuneCountInString(part)
 		out.WriteString(part)
 		return emit(part)
-	}, thought: thinking}
+	}, thought: func(part string) error {
+		stats.ThinkingCharacters += utf8.RuneCountInString(part)
+		if thinking != nil {
+			return thinking(part)
+		}
+		return nil
+	}}
 	received := 0
+	completed, finishReason := false, ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -272,16 +324,26 @@ func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, 
 			}
 			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if line == "[DONE]" {
+				completed = true
 				break
 			}
 		}
 		var chunk struct {
-			Message struct {
+			Usage struct {
+				Prompt     int64 `json:"prompt_tokens"`
+				Completion int64 `json:"completion_tokens"`
+			} `json:"usage"`
+			PromptEvalCount int64  `json:"prompt_eval_count"`
+			EvalCount       int64  `json:"eval_count"`
+			Done            bool   `json:"done"`
+			DoneReason      string `json:"done_reason"`
+			Message         struct {
 				Content  string          `json:"content"`
 				Thinking json.RawMessage `json:"thinking"`
 			} `json:"message"`
 			Choices []struct {
-				Delta struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
 					Content          string          `json:"content"`
 					ReasoningContent json.RawMessage `json:"reasoning_content"`
 					Reasoning        json.RawMessage `json:"reasoning"`
@@ -291,10 +353,22 @@ func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, 
 			Error json.RawMessage `json:"error"`
 		}
 		if err = json.Unmarshal([]byte(line), &chunk); err != nil {
-			return out.String(), errors.New("模型返回了无法解析的流式响应")
+			return out.String(), modelFailure("invalid_stream", "模型返回了无法解析的流式响应")
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			return out.String(), errors.New("模型服务报告生成错误，请检查服务日志")
+			return out.String(), modelServiceFailure(chunk.Error, cfg.APIKey, "模型服务报告生成错误：")
+		}
+		if chunk.Usage.Prompt > 0 {
+			stats.InputTokens = chunk.Usage.Prompt
+		}
+		if chunk.Usage.Completion > 0 {
+			stats.OutputTokens = chunk.Usage.Completion
+		}
+		if chunk.PromptEvalCount > 0 {
+			stats.InputTokens = chunk.PromptEvalCount
+		}
+		if chunk.EvalCount > 0 {
+			stats.OutputTokens = chunk.EvalCount
 		}
 		part := chunk.Message.Content
 		thought := modelThinkingText(chunk.Message.Thinking)
@@ -309,9 +383,10 @@ func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, 
 				thought = modelThinkingText(delta.Thinking)
 			}
 		}
+		stats.ThinkingCharacters += utf8.RuneCountInString(thought)
 		received += len(part) + len(thought)
 		if received > 8<<20 {
-			return out.String(), errors.New("输出过长，已停止生成")
+			return out.String(), modelFailure("local_output_limit", "收到的输出超过本地 8 MiB 保护上限，已停止生成；这不是模型上下文超限")
 		}
 		if thought != "" && thinking != nil {
 			if err = thinking(thought); err != nil {
@@ -321,15 +396,33 @@ func GenerateWithThinking(ctx context.Context, cfg AIConfig, cp ContextPackage, 
 		if err = stream.write(part, false); err != nil {
 			return out.String(), err
 		}
+		if cfg.Provider == "ollama" && chunk.Done {
+			completed, finishReason = true, chunk.DoneReason
+			break
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
+			completed, finishReason = true, chunk.Choices[0].FinishReason
+			break
+		}
 	}
 	if err = scanner.Err(); err != nil {
-		return out.String(), err
+		return out.String(), modelStreamError(ctx, err, idleTimeout, totalTimeout)
+	}
+	if !completed {
+		return out.String(), modelFailure("connection_closed", "模型连接提前结束，未收到完成标记；已有候选保留但未完成，请检查模型服务或反向代理的超时设置")
+	}
+	stats.FinishReason = finishReason
+	if finishReason == "length" || finishReason == "max_tokens" {
+		return out.String(), modelFailure("output_limit", fmt.Sprintf("模型达到本次输出上限（%d token，部分模型包含思考用量），结果未完成；可增大输出上限或减少本次审稿范围。这不等于输入上下文超限", cfg.OutputLimit))
+	}
+	if finishReason == "content_filter" {
+		return out.String(), modelFailure("content_filter", "模型服务因内容过滤停止生成，结果未完成")
 	}
 	if err = stream.write("", true); err != nil {
 		return out.String(), err
 	}
 	if strings.TrimSpace(out.String()) == "" {
-		return "", errors.New("模型没有返回正文，请检查模型是否支持此接口")
+		return "", modelFailure("empty_answer", "模型没有返回正文，请检查模型是否支持此接口")
 	}
 	return out.String(), nil
 }

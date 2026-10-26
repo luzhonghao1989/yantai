@@ -104,6 +104,8 @@ export type ProjectInfo = {
   chapters: number;
 };
 export type Config = {
+  requestTimeoutMinutes?: number;
+  idleTimeoutMinutes?: number;
   comfy?: ComfyConfig;
   embeddingModel?: string;
   provider: string;

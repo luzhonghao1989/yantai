@@ -2354,3 +2354,7 @@ a:hover {
 
 .save-conflict-banner { padding:14px 22px; border-bottom:1px solid var(--line); background:var(--green-soft); flex-shrink:0; font-size:12px; }
 .save-conflict-banner p { margin:6px 0 10px; overflow-wrap:anywhere; }
+
+.ai-error-log { margin:20px 0; padding:16px; border:1px solid var(--line); border-radius:8px; }
+.ai-error-log details { margin-top:10px; padding:8px; background:var(--bg); border-radius:5px; overflow-wrap:anywhere; font-size:12px; }
+.ai-error-log summary { cursor:pointer; }

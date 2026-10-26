@@ -1,3 +1,4 @@
+import AIErrorLog from "./AIErrorLog";
 import { mergeProjects, describeSaveConflict } from "./project-merge";
 import SyncSettings, { useSyncClient, type SyncReport, type SyncMarker } from "./SyncSettings";
 import { draftCache } from "./draft-cache";
@@ -2219,6 +2220,15 @@ export default function App() {
                 />
               </Field>
             </div>
+            <div className="form-grid">
+              <Field label="AI 请求总超时（分钟）" hint="从开始请求计时；0 表示不限制总时长，适合本地模型长时间思考或审稿。">
+                <input aria-label="AI 请求总超时（分钟）" type="number" min={0} step={1} value={config.requestTimeoutMinutes ?? 0} onChange={e => set({requestTimeoutMinutes:Number(e.target.value)})}/>
+              </Field>
+              <Field label="AI 无响应超时（分钟）" hint="持续收到思考、正文或心跳时重新计时；0 表示不限制无响应等待。">
+                <input aria-label="AI 无响应超时（分钟）" type="number" min={0} step={1} value={config.idleTimeoutMinutes ?? 10} onChange={e => set({idleTimeoutMinutes:Number(e.target.value)})}/>
+              </Field>
+            </div>
+            <AIErrorLog onDownload={download} notify={notify}/>
             <Field
               label="AI 来源检测接口完整地址"
               hint="可选：接收 text、language；返回 score（0 至 1，可为空）、label、model、explanation、language。请使用支持中文的独立检测服务。"
@@ -2797,7 +2807,7 @@ export default function App() {
           </div>
           {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} onLocate={locateSource} />}
           {candidate.mode === "revision" && <div className="candidate-text"><RevisionCandidate text={candidate.text} tasks={candidate.revisionTasks || []} complete={candidate.complete} retrying={candidate.retrying} appliedIds={appliedRevisionIds()} onReplace={replaceOneRevision} onLocate={locateSource}/></div>}
-          {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onReplaceAll={()=>replaceAllReview(candidate.id)} onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:<p className="muted">正在审稿并生成可替换的修改段落……</p>}</div>}
+          {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onReplaceAll={()=>replaceAllReview(candidate.id)} onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:generating?<p className="muted">正在审稿并生成可替换的修改段落……</p>:<><p className="info-note">审稿未完成，以下是已收到的部分内容，可复制留存；未开放段落替换。错误记录可在模型与设置中查看。</p><AIContent text={candidate.text}/></>}</div>}
           {candidate.mode === "map" && candidate.complete && <SceneMapPreview onDelete={()=>deleteMap(candidate.id)} text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
           <div className="candidate-text" hidden={candidate.mode === "revision" || candidate.mode === "review" || (candidate.mode === "map" && candidate.complete)}>
             {candidate.text ? <AIContent text={candidate.text} onLocate={locateSource} sourceText={chapter?.text} /> : <span className="muted">等待模型响应……</span>}
