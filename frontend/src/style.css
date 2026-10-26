@@ -2351,3 +2351,6 @@ a:hover {
 .editor-status-actions { display:flex; align-items:center; gap:12px; margin-left:auto; white-space:nowrap; }
 .editor-back-top { display:inline-flex; align-items:center; gap:4px; padding:3px 6px; border:0; border-radius:4px; background:transparent; color:var(--muted); font:inherit; cursor:pointer; }
 .editor-back-top:hover, .editor-back-top:focus-visible { background:var(--green-soft); color:var(--green); }
+
+.save-conflict-banner { padding:14px 22px; border-bottom:1px solid var(--line); background:var(--green-soft); flex-shrink:0; font-size:12px; }
+.save-conflict-banner p { margin:6px 0 10px; overflow-wrap:anywhere; }

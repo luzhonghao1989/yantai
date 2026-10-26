@@ -212,6 +212,10 @@ export function apiHeaders(json = false): Record<string, string> {
     ...(json ? { "Content-Type": "application/json" } : {}),
   };
 }
+export class APIError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.name = "APIError"; this.status = status; }
+}
 export async function api<T>(
   path: string,
   method = "GET",
@@ -231,7 +235,7 @@ export async function api<T>(
     } catch {
       msg += ` (${r.status})`;
     }
-    throw Error(msg);
+    throw new APIError(msg, r.status);
   }
   return r.json();
 }

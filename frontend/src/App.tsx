@@ -1,3 +1,4 @@
+import { mergeProjects, describeSaveConflict } from "./project-merge";
 import SyncSettings, { useSyncClient, type SyncReport, type SyncMarker } from "./SyncSettings";
 import { draftCache } from "./draft-cache";
 import { localSettings } from "./local-settings";
@@ -71,6 +72,7 @@ import {
 import WritingEditor, { type Selection } from "./Editor";
 import {
   api,
+  APIError,
   apiURL,
   apiHeaders,
   doc,
@@ -398,6 +400,8 @@ export default function App() {
     }, 600);
     return () => {active = false; clearTimeout(timer);};
   }, [page, config?.provider, config?.baseUrl, config?.model, config?.apiKey, config?.hasKey]);
+  const [saveConflicts, setSaveConflicts] = useState<string[]>([]);
+  const conflictRef = useRef(false), baseRef = useRef<Project | null>(null);
   const pRef = useRef<Project | null>(null),
     dirty = useRef(0),
     saved = useRef(0),
@@ -462,6 +466,7 @@ export default function App() {
     setStorylineId(localSettings.getItem("storyline:" + p.id) || p.storylines[0]?.id || "");
     setEditorEpoch((value) => value + 1);
     pRef.current = p;
+    baseRef.current = structuredClone(p); conflictRef.current = false; setSaveConflicts([]);
     dirty.current = 0;
     saved.current = 0;
     setProject(p);
@@ -510,16 +515,37 @@ export default function App() {
       return;
     }
     if (!pRef.current || dirty.current === saved.current) return;
+    if (conflictRef.current) throw new APIError("项目存在保存冲突，请使用上方冲突处理入口保留草稿后读取最新内容或返回书架。", 409);
     const work = async () => {
+      let rebases = 0;
       while (pRef.current && dirty.current !== saved.current) {
         const snapshot = structuredClone(pRef.current);
         const seq = dirty.current;
         setSaveStatus("保存中");
-        const p = await api<Project>(
-          `/projects/${snapshot.id}`,
-          "PUT",
-          snapshot,
-        );
+        let p: Project;
+        try {
+          p = await api<Project>(`/projects/${snapshot.id}`, "PUT", snapshot);
+        } catch (error) {
+          if (!(error instanceof APIError) || error.status !== 409) throw error;
+          if (++rebases > 3) {
+            conflictRef.current = true; setSaveConflicts(["项目被连续更新，请稍后重试合并"]);
+            throw new APIError("项目被连续更新，自动保存已暂停，可另存草稿后退出或重试合并。", 409);
+          }
+          const latest = await api<Project>(`/projects/${snapshot.id}`);
+          if (pRef.current?.id !== snapshot.id) return;
+          const merged = baseRef.current ? mergeProjects(baseRef.current, pRef.current, latest) : { project: pRef.current, conflicts: ["当前草稿缺少原始版本"] };
+          if (merged.conflicts.length) {
+            conflictRef.current = true; setSaveConflicts(merged.conflicts);
+            throw new APIError("同一处内容被两端修改，草稿已保留。请在上方处理冲突后返回书架或读取最新内容。", 409);
+          }
+          baseRef.current = structuredClone(latest);
+          pRef.current = merged.project; dirty.current++;
+          setProject(merged.project); setEditorEpoch(value => value + 1);
+          if (!merged.project.chapters.some(c => c.id === activeChapterRef.current)) setChapterId(merged.project.chapters[0]?.id || "");
+          cacheDraft(merged.project);
+          continue;
+        }
+        baseRef.current = structuredClone(p);
         if (pRef.current?.id !== snapshot.id) return;
         pRef.current = {
           ...pRef.current,
@@ -545,7 +571,7 @@ export default function App() {
     try {
       await promise;
     } catch (e) {
-      setSaveStatus("保存失败");
+      setSaveStatus(conflictRef.current ? "保存冲突" : "保存失败");
       notify((e as Error).message);
       throw e;
     } finally {
@@ -562,13 +588,13 @@ export default function App() {
     if(dirty.current!==saved.current||dirty.current!==marker.seq){notify("服务端版本已下载，本窗口的新编辑仍保留；请先导出草稿，再读取最新项目。");return;}
     const fresh=await api<Project>("/projects/"+id);
     if(pRef.current?.id!==id||dirty.current!==saved.current||dirty.current!==marker.seq)return;
-    pRef.current=fresh;setProject(fresh);setEditorEpoch(value=>value+1);setSaveStatus("已保存");
+    baseRef.current=structuredClone(fresh);pRef.current=fresh;setProject(fresh);setEditorEpoch(value=>value+1);setSaveStatus("已保存");
     if(!fresh.chapters.some(c=>c.id===activeChapterRef.current))setChapterId(fresh.chapters[0]?.id||"");
   },[refreshBooks,notify]);
   const syncClient=useSyncClient(prepareSync,completeSync,notify);
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
-    if (project && dirty.current !== saved.current)
+    if (project && dirty.current !== saved.current && !conflictRef.current)
       timer.current = setTimeout(() => {
         flush().catch(() => {});
       }, 800);
@@ -648,7 +674,17 @@ export default function App() {
       const p = await api<Project>("/projects/" + id);
       const cache = await draftCache.read(id);
       setCurrent(p);
-      if (cache) {
+      if (cache && cache.revision !== p.revision) {
+        setDialog({
+          title: "草稿与最新项目版本不同", fields: [], button: "另存草稿副本",
+          description: "项目已被 API 或其他窗口更新。当前打开的是最新版本；旧草稿可以另存为独立项目，再从书架核对，不会覆盖最新内容。",
+          submit: async () => {
+            await api<Project>("/import", "POST", { ...cache, name: cache.name + " · 恢复草稿" });
+            await draftCache.remove(id); await refreshBooks();
+            notify("旧草稿已另存到书架，当前项目保留最新内容");
+          },
+        });
+      } else if (cache) {
         const draft = cache;
         setDialog({
           title: "发现未保存的草稿",
@@ -845,13 +881,37 @@ export default function App() {
       )
         [p.chapters[i], p.chapters[j]] = [p.chapters[j], p.chapters[i]];
     });
+  const resolveSaveConflict = (toShelf: boolean) => setDialog({
+    title: "保留草稿并处理冲突", fields: [], button: toShelf ? "另存草稿副本并返回书架" : "另存草稿副本并读取最新",
+    description: "先将本窗口全部未保存修改另存为独立的小说项目，再读取 API 的最新项目。两个版本都会保留，之后可在书架打开草稿副本核对。",
+    submit: async () => {
+      if (saving.current) { try { await saving.current; } catch { /* Conflict is handled below. */ } }
+      abortRef.current?.abort(); setGenerating(false);
+      const draft = pRef.current && structuredClone(pRef.current), seq = dirty.current;
+      if (!draft) return;
+      draft.name += " · 冲突草稿 " + new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-");
+      await api<Project>("/import", "POST", draft);
+      const latest = await api<Project>("/projects/" + draft.id);
+      if (pRef.current?.id !== draft.id || dirty.current !== seq) throw Error("草稿副本已保存，但窗口又有新编辑，请再次处理以保留最新修改。");
+      await draftCache.remove(draft.id);
+      if (pRef.current?.id !== draft.id || dirty.current !== seq) {
+        if (pRef.current) cacheDraft(pRef.current);
+        throw Error("草稿副本已保存，期间出现的新编辑仍保留，请再次处理。");
+      }
+      setCurrent(latest);
+      if (toShelf) setShelf(true);
+      await refreshBooks();
+      notify("草稿副本已另存到书架，API 最新内容已保留");
+    },
+  });
   const goShelf = async () => {
+    if (conflictRef.current) { resolveSaveConflict(true); return; }
     try {
       await flush();
       abortRef.current?.abort();
       setShelf(true);
       await refreshBooks();
-    } catch {}
+    } catch { if (conflictRef.current) resolveSaveConflict(true); }
   };
   const exportProject = async (format: string) => {
     if (!project) return;
@@ -3073,13 +3133,13 @@ export default function App() {
                 <Button secondary onClick={() => exportProject("json")}><Download size={15} />备份项目</Button>
                 <button
                   className={
-                    "save-badge " + (saveStatus === "保存失败" ? "error" : "")
+                    "save-badge " + (["保存失败", "保存冲突"].includes(saveStatus) ? "error" : "")
                   }
                   onClick={() => flush().catch(() => {})}
                 >
                   {saveStatus === "保存中" ? (
                     <Loader2 className="spin" size={14} />
-                  ) : saveStatus === "保存失败" ? (
+                  ) : ["保存失败", "保存冲突"].includes(saveStatus) ? (
                     <AlertCircle size={14} />
                   ) : (
                     <CheckCircle2 size={14} />
@@ -3090,8 +3150,10 @@ export default function App() {
                   <History size={18} />
                 </button>
                 <button className="icon" title="读取 Agent 最新修改" onClick={async () => {
-                  if (dirty.current !== saved.current || saving.current) { notify("请先保存当前修改。若保存冲突，请导出草稿，再重新打开项目。"); return; }
-                  try { const latest = await api<Project>(`/projects/${project!.id}`); setCurrent(latest); notify("已读取最新项目内容"); } catch (e) { notify((e as Error).message); }
+                  if (conflictRef.current) { resolveSaveConflict(false); return; }
+                  try { await flush(); } catch { if (conflictRef.current) resolveSaveConflict(false); return; }
+                  const id = pRef.current?.id, seq = dirty.current;
+                  try { const latest = await api<Project>(`/projects/${id}`); if (pRef.current?.id !== id || dirty.current !== seq) { notify("读取期间又有新编辑，请保存后重试"); return; } setCurrent(latest); notify("已读取最新项目内容"); } catch (e) { notify((e as Error).message); }
                 }}><RefreshCw size={17} /></button>
                 <button
                   className="icon"
@@ -3133,6 +3195,11 @@ export default function App() {
                 </details>
               </div>
             </header>
+            {!!saveConflicts.length && <section className="save-conflict-banner" role="alert">
+              <b>保存冲突：窗口草稿与 API 最新内容都已保留</b>
+              <p>同一处内容被两端修改，自动保存已暂停。{saveConflicts.slice(0, 3).map(describeSaveConflict).join("；")}</p>
+              <div className="inline"><button className="btn secondary" onClick={() => resolveSaveConflict(false)}>另存草稿副本并读取最新</button><button className="btn secondary" onClick={() => resolveSaveConflict(true)}>另存草稿副本并返回书架</button><button className="text-button" onClick={() => { conflictRef.current = false; setSaveConflicts([]); void flush().catch(() => {}); }}>重试合并</button></div>
+            </section>}
             {page === "write" ? (
               <>
                 <div className="chapter-header">

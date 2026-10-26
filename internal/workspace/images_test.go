@@ -113,3 +113,52 @@ func TestUnsafeImageRejection(t *testing.T) {
 		t.Fatal("HTML MIME accepted")
 	}
 }
+
+func TestConflictDraftCopyPreservesLatestAndSharedImages(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Create("并发草稿", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`
+	p.Images = []ProjectImage{{ID: ID(), Name: "保留图.svg", Kind: "map", Data: "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(svg))}}
+	p, err = s.Save(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := p
+	draft.Chapters = append([]Chapter(nil), p.Chapters...)
+	draft.Chapters[0].Text = "窗口独有正文"
+	draft.Chapters[0].Content = EmptyDoc(draft.Chapters[0].Text)
+	p.Chapters[0].Text = "API 最新正文"
+	p.Chapters[0].Content = EmptyDoc(p.Chapters[0].Text)
+	p, err = s.Save(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Save(draft); err != ErrConflict {
+		t.Fatal("stale draft overwrote latest", err)
+	}
+	raw, _ := json.Marshal(draft)
+	request := httptest.NewRequest("POST", "http://localhost/api/import", bytes.NewReader(raw))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	(&Server{Store: s}).Handler().ServeHTTP(response, request)
+	if response.Code != 201 {
+		t.Fatal(response.Body.String())
+	}
+	var copy Project
+	if err = json.Unmarshal(response.Body.Bytes(), &copy); err != nil {
+		t.Fatal(err)
+	}
+	if copy.ID == p.ID || copy.Chapters[0].Text != "窗口独有正文" || len(copy.Images) != 1 || copy.Images[0].SHA != p.Images[0].SHA {
+		t.Fatal("draft copy incomplete")
+	}
+	latest, err := s.Load(p.ID)
+	if err != nil || latest.Revision != p.Revision || latest.Chapters[0].Text != "API 最新正文" {
+		t.Fatal("original latest changed", err)
+	}
+}
