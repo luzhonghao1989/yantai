@@ -61,3 +61,28 @@ const chainState=EditorState.create({schema,doc:chainDoc});
 const chain=replaceReviewParagraphs(chainState,[{...first,original:'原文甲。',replacement:'原文乙。'},{...second,original:'原文乙。',replacement:'原文丙。'}]);
 assert.equal(chainState.apply(chain.transaction).doc.textBetween(0,chainState.apply(chain.transaction).doc.content.size,'\n'),'原文乙。\n原文丙。','New replacement text must not retarget another suggestion');
 console.log('Review replacement: structured/legacy parsing, exact whole-paragraph anchors, sequential replacements, multiline output, formatting, duplicate/stale rejection, atomic batch replacement, conflict skips and independent undo passed');
+
+// Common model formatting variations must preserve exact original/replacement text.
+const canonical={summary:'需要调整对白。',suggestions:[{original:'她说你好。',replacement:'她抬起眼：“你来了？”',reason:'让对白自然。',paragraph:2}]};
+for(const raw of [
+ '以下为审稿结果：\n'+JSON.stringify(canonical)+'\n以上为建议。',
+ '```JSON '+JSON.stringify(canonical)+'```',
+ JSON.stringify({result:canonical}),JSON.stringify({data:JSON.stringify(canonical)}),
+ JSON.stringify(canonical).replace(/}$/,',}').replace(/](?=,)/,',]'),
+ JSON.stringify({suggestions:canonical.suggestions}),
+ JSON.stringify(canonical.suggestions),
+ JSON.stringify({总评:canonical.summary,修改建议:[{原文:canonical.suggestions[0].original,修改后:canonical.suggestions[0].replacement,修改理由:'让对白自然。',段落序号:'2'}]}),
+ JSON.stringify({summary:canonical.summary,edits:[{originalText:canonical.suggestions[0].original,revisedText:canonical.suggestions[0].replacement,explanation:'让对白自然。',paragraphIndex:2}]}),
+ ]) {
+ const parsed=parseReviewResult(raw);assert(parsed,raw);assert.equal(parsed.suggestions.length,1);assert.equal(parsed.suggestions[0].original,canonical.suggestions[0].original);assert.equal(parsed.suggestions[0].replacement,canonical.suggestions[0].replacement);assert.equal(reviewTarget(original,parsed.suggestions[0]).paragraph,2);assert.equal(reviewRetryInstruction(raw),'');
+}
+const special={summary:'原文含有 },] 和反斜杠，不得改动引用。',suggestions:[{original:'他说：“}，] \"”。',replacement:'她看着他：“说完了？”',reason:'标点测试'}]};
+assert.equal(parseReviewResult(JSON.stringify(special)).suggestions[0].original,special.suggestions[0].original);
+const rawLines='{"summary":"第一行\n第二行","suggestions":[]}';
+assert.equal(parseReviewResult(rawLines).summary,'第一行\n第二行');
+for(const broken of ['{"summary":"建议","suggestions":[', '```json\n{"summary":"建议","suggestions":[{', '{"summary":"错误的 " 引号","suggestions":[]}']) {assert.equal(parseReviewResult(broken),null);assert(reviewRetryInstruction(broken).includes('标准的 JSON'));}
+assert.equal(parseReviewResult('{"arbitrary":"unrelated"}'),null);
+assert.equal(parseReviewResult('[{"title":"不是替换建议"}]'),null);
+const adviceOnly=parseReviewResult(JSON.stringify({summary:'建议',suggestions:[{original:'她说你好。',suggestion:'增加动作'}]}));
+assert.equal(adviceOnly.suggestions[0].replacement,'');assert.throws(()=>reviewTarget(original,adviceOnly.suggestions[0]),/完整原段落/,'Advice must never be treated as replacement prose');
+console.log('Review formatting: surrounding prose/fences, wrappers, aliases, absent summary, bare arrays, safe syntax repair, exact anchors and malformed/truncated rejection passed');

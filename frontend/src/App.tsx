@@ -1162,8 +1162,14 @@ export default function App() {
               retryNeeded = true;
               initial.retrying = true;
               input.instruction += reviewCorrection;
-              notify("AI 返回的建议未实际修改，正在按意见重新生成一次。");
-              setCandidate({ ...initial, text: "" });
+              initial.id = ev.data.id;
+              initial.model = ev.data.model;
+              if (pRef.current?.id === p.id) edit(current => current.aiRuns.push({ id:initial.id,chapterId:c.id,mode:taskMode,model:initial.model,text:completeText,accepted:false,createdAt:new Date().toISOString(),inputText:c.text }));
+              await flush();
+              setCandidate({ ...initial, text: completeText, complete: true });
+              if (pRef.current?.id !== p.id || contextSignature(pRef.current) !== initial.contextSignature) throw Error("审稿已保存，正文或资料在生成期间发生变化，请在当前稿件重新审稿。");
+              input.revision = pRef.current.revision;
+              notify(parseReviewResult(completeText) ? "AI 返回的建议未实际修改，正在按意见重新生成一次。" : "审稿内容已保存，正在自动纠正返回格式一次。");
               break;
             }
             if (tasks && attempt === 0) {
@@ -1178,6 +1184,7 @@ export default function App() {
               }
             }
             initial.id = ev.data.id;
+            initial.retrying = false;
             setAIProgress(null);
             initial.model = ev.data.model;
             completeText = ev.data.text;

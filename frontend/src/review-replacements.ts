@@ -9,19 +9,77 @@ export type ReviewResult = { summary: string; suggestions: ReviewSuggestion[] };
 export function reviewHasChange(suggestion: ReviewSuggestion) {
   return !!suggestion.original.trim() && !!suggestion.replacement.trim() && revisionHasChange(suggestion.original, suggestion.replacement);
 }
+const reviewFormatInstruction = "\n重试纠正：上一轮审稿的结构无法读取。请重新审查同一份正文，只返回一个完整、标准的 JSON 对象：{\"summary\":\"审稿总结\",\"suggestions\":[{\"paragraph\":1,\"original\":\"逐字引用完整原段落\",\"replacement\":\"按意见实际修改后的完整段落\",\"reason\":\"修改理由\"}]}。所有字符串使用英文双引号，字符串中的双引号、反斜杠和换行必须正确转义；不输出前后说明或代码围栏。没有可确定的修改时 suggestions 返回空数组。不得补造原文或把修改意见冒充改文。";
 export function reviewRetryInstruction(text: string): string {
-  const unchanged = parseReviewResult(text)?.suggestions.filter(s => s.original.trim() && s.replacement.trim() && !reviewHasChange(s)) || [];
+  const parsed = parseReviewResult(text);
+  if (!parsed && (/^\s*(?:```(?:json)?\s*)?[{[]/i.test(text) || /"(?:summary|suggestions)"\s*:/.test(text))) return reviewFormatInstruction;
+  const unchanged = parsed?.suggestions.filter(s => s.original.trim() && s.replacement.trim() && !reviewHasChange(s)) || [];
   if (!unchanged.length) return "";
   return "\n重试纠正：上一轮这些建议的 replacement 与 original 没有实际变化（仅改空白也不算修改）。请根据 reason 实际改写，保留剧情与设定；不能把原文抄回作为改文。如果无法提出有依据的修改，删除该条建议并在 summary 中说明。重新返回完整的 summary 和 suggestions JSON，保留其他有效建议。需要纠正的建议：\n" + JSON.stringify(unchanged.map(({paragraph,original,reason})=>({paragraph,original,reason})));
 }
+
+// Repair only unambiguous JSON syntax outside prose: trailing commas and raw
+// control characters in strings. Never invent missing quotes/brackets or text.
+function normalizeReviewJSON(text: string) {
+  let quoted=false, escaped=false, out="";
+  for(let i=0;i<text.length;i++) {
+    const c=text[i];
+    if(quoted) {
+      if(escaped) {out+=c;escaped=false;}
+      else if(c==="\\") {out+=c;escaped=true;}
+      else if(c==='"') {out+=c;quoted=false;}
+      else out+=c.charCodeAt(0)<32?JSON.stringify(c).slice(1,-1):c;
+    } else {
+      if(c==='"') quoted=true;
+      if(c===",") {let j=i+1;while(/\s/.test(text[j]||"")&&j<text.length)j++;if(text[j]==="}"||text[j]==="]")continue;}
+      out+=c;
+    }
+  }
+  return out;
+}
+function reviewJSONCandidates(text: string) {
+  const candidates=[text.trim().replace(/^\uFEFF/,"")];
+  for(const match of text.matchAll(/```(?:json|javascript)?\s*([\s\S]*?)```/gi)) {if(candidates.length>=20)break;candidates.push(match[1]);}
+  let start=-1, quoted=false, escaped=false;const stack:string[]=[];
+  for(let i=0;i<text.length&&candidates.length<40;i++) {
+    const c=text[i];
+    if(start<0) {if(c==="{"||c==="["){start=i;stack.push(c);}continue;}
+    if(quoted) {if(escaped)escaped=false;else if(c==="\\")escaped=true;else if(c==='"')quoted=false;continue;}
+    if(c==='"') {quoted=true;continue;}
+    if(c==="{"||c==="[")stack.push(c);
+    if(c==="}"||c==="]") {
+      if(stack.pop()!==(c==="}"?"{":"[")){start=-1;stack.length=0;continue;}
+      if(!stack.length){candidates.push(text.slice(start,i+1));start=-1;}
+    }
+  }
+  return [...new Set(candidates)];
+}
+const reviewObject = (value:unknown):value is Record<string,unknown> => !!value&&typeof value==="object"&&!Array.isArray(value);
+const reviewField = (record:Record<string,unknown>,names:string[]) => names.map(name=>record[name]).find(value=>typeof value==="string") as string|undefined;
+function reviewShape(value:unknown,depth=0):ReviewResult|null {
+  if(depth>4)return null;
+  if(typeof value==="string") {try{return reviewShape(JSON.parse(normalizeReviewJSON(value)),depth+1);}catch{return null;}}
+  if(!reviewObject(value)&&!Array.isArray(value))return null;
+  if(reviewObject(value)) {
+    for(const key of ["result","data","review","审稿结果"]) {const nested=reviewShape(value[key],depth+1);if(nested)return nested;}
+  }
+  const record=reviewObject(value)?value:{};
+  const summary=reviewField(record,["summary","overview","总结","审稿总结","总评","总体评价"]);
+  let list:unknown=Array.isArray(value)?value:["suggestions","replacements","edits","修改建议","建议列表"].map(key=>record[key]).find(Array.isArray);
+  if(!Array.isArray(list)) {if(summary!==undefined)return {summary,suggestions:[]};return null;}
+  // A bare array must actually contain replacement records, not arbitrary JSON.
+  if(Array.isArray(value)&&(!list.length||!list.some(item=>reviewObject(item)&&reviewField(item,["original","originalText","原文","原段落"])!==undefined)))return null;
+  return {summary:summary??"模型未提供审稿总结，以下为提取到的修改建议。",suggestions:list.filter(reviewObject).map((item,i)=>{
+    const paragraph=item.paragraph??item.paragraphIndex??item["段落序号"]??item["段落"];
+    const number=typeof paragraph==="number"?paragraph:typeof paragraph==="string"&&/^\d+$/.test(paragraph)?Number(paragraph):undefined;
+    return {id:`suggestion-${i}`,original:(reviewField(item,["original","originalText","原文","原段落"])??"").replace(/\r\n?/g,"\n"),replacement:(reviewField(item,["replacement","revisedText","modifiedText","修改后","改写后","修改后文本","改文"])??"").replace(/\r\n?/g,"\n"),reason:reviewField(item,["reason","explanation","comment","修改意见","修改理由","理由"])??"",paragraph:Number.isSafeInteger(number)&&Number(number)>0?number:undefined};
+  })};
+}
 export function parseReviewResult(text: string): ReviewResult | null {
-  try {
-    const data=JSON.parse(text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/i,"$1"));
-    if(typeof data?.summary!=="string" || !Array.isArray(data.suggestions))return null;
-    return {summary:data.summary,suggestions:data.suggestions.filter((s:unknown):s is Record<string,unknown>=>!!s&&typeof s==="object").map((s:Record<string,unknown>,i:number)=>({
-      id:`suggestion-${i}`,original:typeof s.original==="string"?s.original.replace(/\r\n?/g,"\n"):"",replacement:typeof s.replacement==="string"?s.replacement.replace(/\r\n?/g,"\n"):"",reason:typeof s.reason==="string"?s.reason:"",paragraph:Number.isInteger(s.paragraph)&&Number(s.paragraph)>0?Number(s.paragraph):undefined,
-    }))};
-  }catch{return null;}
+  for(const candidate of reviewJSONCandidates(text)) {
+    try {const result=reviewShape(JSON.parse(normalizeReviewJSON(candidate)));if(result)return result;}catch{/* Try the next complete object without altering prose. */}
+  }
+  return null;
 }
 export function reviewParagraphs(doc: Node) {
   const paragraphs:{from:number;to:number;text:string;paragraph:number}[]=[];

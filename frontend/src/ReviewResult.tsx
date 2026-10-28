@@ -7,9 +7,10 @@ import { parseReviewResult,reviewTarget,reviewReplacementPresent,reviewHasChange
 export default function ReviewResult({text,document,onReplace,onReplaceAll,onGenerate,onLocate,busy=false}:{text:string;document?:Node;onReplace?:(suggestion:ReviewSuggestion)=>void;onReplaceAll?:()=>void;onGenerate?:()=>void;onLocate?:LocateSource;busy?:boolean}){
   const result=parseReviewResult(text);
   const plan=document&&result?reviewReplacementPlan(document,result.suggestions):null;
-  const malformed=!result&&/^\s*(?:```json\s*)?\{/.test(text);
+  const malformed=!result&&/^(?:\s*```(?:json)?\s*)?\s*[\[{]|"(?:summary|suggestions)"\s*:/i.test(text);
   return <div className="review-result">
-    {malformed?<p className="info-note">AI 返回的审稿格式不完整，暂时无法生成可替换段落，请重新生成。</p>:<AIContent text={result?.summary??text} onLocate={onLocate} sourceText={document?.textBetween(0,document.content.size,"\n","\n")}/>}
+    <AIContent text={result?.summary??text} onLocate={onLocate} sourceText={document?.textBetween(0,document.content.size,"\n","\n")}/>
+    {malformed&&<p className="info-note">审稿内容已保留，暂未提取到可替换的完整段落。可点击下方“按审稿意见生成修改段落”，已有内容仍可查看和复制。</p>}
     {!!result?.suggestions.length&&onReplaceAll&&<div className="review-bulk-actions">
       <button className="btn" disabled={busy||!plan?.items.length} onClick={onReplaceAll}>一键替换全部建议{plan?.items.length?`（${plan.items.length} 段）`:""}</button>
       <p className="muted">{!document?"请先打开对应章节正文。":plan?.items.length?`仅替换已核对原文的有效建议${plan.skipped.length?`，跳过 ${plan.skipped.length} 条已处理、无效或冲突建议`:""}；整批可一次撤销。`:"暂无可批量替换的建议；已替换、原文变化、无实际修改或冲突的建议会跳过。"}</p>
