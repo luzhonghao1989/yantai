@@ -101,6 +101,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	backupContext, stopBackups := context.WithCancel(context.Background())
+	defer stopBackups()
+	store.StartDailyBackups(backupContext)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatal(err)

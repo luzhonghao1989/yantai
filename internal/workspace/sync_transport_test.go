@@ -18,7 +18,7 @@ func TestSyncPortExposesOnlyAuthenticatedTLSProtocol(t *testing.T) {
 	}
 	s := &Server{Store: store, Remote: true, AuthKey: syncTestKey, Assets: fstest.MapFS{"index.html": {Data: []byte("PRIVATE EDITOR")}}}
 	handler := s.SyncHandler()
-	for _, path := range []string{"/", "/index.html", "/assets/app.js", "/api/server-info", "/api/auth/login", "/api/projects", "/api/config", "/api/agent", "/api/sync/settings", "/api/sync/run", "/api/sync/manifest", "/api/sync/projects/invalid", "/api/sync//manifest"} {
+	for _, path := range []string{"/", "/index.html", "/assets/app.js", "/api/server-info", "/api/auth/login", "/api/projects", "/api/config", "/api/agent", "/api/sync/settings", "/api/sync/run", "/api/backups", "/api/backups/settings", "/api/sync/catalog", "/api/sync/manifest", "/api/sync/projects/invalid", "/api/sync//manifest"} {
 		for _, auth := range []string{"", "Bearer wrong-secret", "Bearer " + syncTestKey} {
 			r := httptest.NewRequest("GET", "https://server.example"+path, nil)
 			r.Header.Set("Authorization", auth)

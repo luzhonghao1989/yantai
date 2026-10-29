@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"log"
@@ -48,6 +49,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	backupContext, stopBackups := context.WithCancel(context.Background())
+	defer stopBackups()
+	store.StartDailyBackups(backupContext)
 	server := &workspace.Server{Store: store, Assets: frontend.Assets(), Remote: *remote, AuthKey: secret}
 	handler := server.Handler()
 	scheme := "http"

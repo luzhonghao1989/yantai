@@ -42,6 +42,8 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerBackups(mux)
+	s.registerProjectDeletion(mux)
 	s.registerAIErrorLog(mux)
 	s.registerImages(mux)
 	s.registerComfy(mux)

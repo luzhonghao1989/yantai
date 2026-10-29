@@ -18,12 +18,14 @@ import (
 )
 
 type SyncSettings struct {
-	ServerURL       string `json:"serverUrl"`
-	Token           string `json:"token"`
-	TLSFingerprint  string `json:"tlsFingerprint"`
-	HasToken        bool   `json:"hasToken"`
-	Automatic       bool   `json:"automatic"`
-	IntervalMinutes int    `json:"intervalMinutes"`
+	ProjectScope     string   `json:"projectScope"`
+	SelectedProjects []string `json:"selectedProjects"`
+	ServerURL        string   `json:"serverUrl"`
+	Token            string   `json:"token"`
+	TLSFingerprint   string   `json:"tlsFingerprint"`
+	HasToken         bool     `json:"hasToken"`
+	Automatic        bool     `json:"automatic"`
+	IntervalMinutes  int      `json:"intervalMinutes"`
 }
 type SyncEntry struct {
 	ID   string `json:"id"`
@@ -31,9 +33,10 @@ type SyncEntry struct {
 	Hash string `json:"hash"`
 }
 type SyncManifest struct {
-	ServerID string      `json:"serverId"`
-	Projects []SyncEntry `json:"projects"`
-	Issues   []SyncIssue `json:"issues,omitempty"`
+	Deleted  []ProjectDeletion `json:"deleted,omitempty"`
+	ServerID string            `json:"serverId"`
+	Projects []SyncEntry       `json:"projects"`
+	Issues   []SyncIssue       `json:"issues,omitempty"`
 }
 type SyncIssue struct {
 	ID      string `json:"id"`
@@ -96,6 +99,15 @@ func (s *Store) SyncSettings() (SyncSettings, error) {
 	return v, e
 }
 func validateSyncSettings(v *SyncSettings) error {
+	if v.ProjectScope != "" && v.ProjectScope != "all" && v.ProjectScope != "selected" {
+		return errors.New("未知项目同步范围")
+	}
+	for _, id := range v.SelectedProjects {
+		if !validID.MatchString(id) {
+			return errors.New("同步项目ID无效")
+		}
+	}
+
 	u, e := url.Parse(strings.TrimSpace(v.ServerURL))
 	if e != nil || u.Host == "" || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return errors.New("同步必须使用 HTTPS 加密地址，不含路径、用户名、查询参数或片段")
@@ -190,6 +202,10 @@ func (s *Store) syncManifest() (SyncManifest, error) {
 		return SyncManifest{}, e
 	}
 	out := SyncManifest{ServerID: string(b), Projects: []SyncEntry{}}
+	out.Deleted, e = s.projectDeletions()
+	if e != nil {
+		return out, e
+	}
 	if !validID.MatchString(out.ServerID) {
 		return out, errors.New("服务端同步标识损坏，请检查数据目录")
 	}
@@ -225,6 +241,18 @@ func (s *Store) applySync(p Project, expected string) (SyncSnapshot, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.applySyncLocked(p, expected)
+}
+
+// Caller holds mu, including when resolving a deleted project's independent copy.
+func (s *Store) applySyncLocked(p Project, expected string) (SyncSnapshot, error) {
+	deletion, deleteErr := s.projectDeletion(p.ID)
+	if deleteErr != nil {
+		return SyncSnapshot{}, deleteErr
+	}
+	if deletion.ID != "" {
+		return SyncSnapshot{}, fmt.Errorf("项目已在服务端删除，旧副本不能重新上传：%w", ErrConflict)
+	}
 	if expected != "" {
 		if _, e := os.Stat(filepath.Join(s.Root, "projects", p.ID, "novel.db")); e != nil {
 			return SyncSnapshot{}, ErrConflict
@@ -374,6 +402,17 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 	if baseline == nil {
 		baseline = map[string]string{}
 	}
+	deleted := map[string]ProjectDeletion{}
+	for _, d := range remote.Deleted {
+		if !validID.MatchString(d.ID) {
+			return report, errors.New("删除记录无效")
+		}
+		deleted[d.ID] = d
+	}
+	selected := map[string]bool{}
+	for _, id := range cfg.SelectedProjects {
+		selected[id] = true
+	}
 	remoteMap := map[string]SyncEntry{}
 	ids := map[string]bool{}
 	for _, p := range remote.Projects {
@@ -416,6 +455,9 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 	}
 	sort.Strings(ordered)
 	for _, id := range ordered {
+		if cfg.ProjectScope == "selected" && !selected[id] {
+			continue
+		}
 		if e = ctx.Err(); e != nil {
 			return report, e
 		}
@@ -450,6 +492,27 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 		item.Name = name
 		item.LocalHash = lh
 		item.RemoteHash = r.Hash
+		if d, ok := deleted[id]; ok {
+			item.Name = d.Name
+			if !hasLocal {
+				continue
+			}
+			if baseline[id] != "" && lh == baseline[id] {
+				err := s.archiveUnchangedDeleted(id, lh)
+				if err != nil {
+					item.Action = "error"
+					item.Message = "服务端已删除；本机备份未完成，保留本机项目：" + err.Error()
+				} else {
+					item.Action = "deleted"
+					item.Message = "服务端已删除，本机未修改副本已移入备份目录"
+				}
+			} else {
+				item.Action = "remote-deleted"
+				item.Message = "服务端已删除此项目；本机有修改或无同步基线，已阻止上传。可保留为独立副本或确认移除。"
+			}
+			report.Items = append(report.Items, item)
+			continue
+		}
 		action := "conflict"
 		base := baseline[id]
 		switch {
@@ -553,6 +616,42 @@ func (s *Store) RunSync(ctx context.Context, resolutions []SyncResolution) (Sync
 }
 
 func (s *Server) registerSync(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/sync/catalog", func(w http.ResponseWriter, r *http.Request) {
+		local, err := s.Store.List()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		items := map[string]SyncEntry{}
+		for _, p := range local {
+			items[p.ID] = SyncEntry{ID: p.ID, Name: p.Name}
+		}
+		warning := ""
+		if !s.Remote {
+			cfg, e := s.Store.SyncSettings()
+			if e != nil {
+				fail(w, e)
+				return
+			}
+			if cfg.ServerURL != "" {
+				var remote SyncManifest
+				e = syncRemote(r.Context(), cfg, "GET", "/manifest", nil, &remote)
+				if e != nil {
+					warning = e.Error()
+				} else {
+					for _, p := range remote.Projects {
+						items[p.ID] = p
+					}
+				}
+			}
+		}
+		out := []SyncEntry{}
+		for _, p := range items {
+			out = append(out, p)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		reply(w, 200, map[string]any{"projects": out, "warning": warning})
+	})
 	mux.HandleFunc("GET /api/sync/settings", func(w http.ResponseWriter, r *http.Request) {
 		if s.Remote {
 			reply(w, 200, map[string]any{"remote": true})

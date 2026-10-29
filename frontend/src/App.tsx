@@ -1,3 +1,5 @@
+import BackupSettings from "./BackupSettings";
+import TitleCandidates from "./TitleCandidates";
 import AIErrorLog from "./AIErrorLog";
 import { mergeProjects, describeSaveConflict } from "./project-merge";
 import SyncSettings, { useSyncClient, type SyncReport, type SyncMarker } from "./SyncSettings";
@@ -156,6 +158,7 @@ const modeLabels: Record<string, string> = {
   rewrite: "改写",
   revision: "按标记修改",
   review: "AI 审稿",
+  title: "生成标题",
   ideas: "原创构思",
   map: "场景平面图（SVG）",
   comfyui: "场景绘制（ComfyUI）",
@@ -604,6 +607,10 @@ export default function App() {
   const completeSync = useCallback(async (report:SyncReport,marker:SyncMarker) => {
     await refreshBooks();
     const id=marker.id;
+    if(id&&pRef.current?.id===id&&report.items.some(item=>item.id===id&&item.action==="deleted")) {
+      if(dirty.current!==saved.current||dirty.current!==marker.seq){notify("服务端已删除项目；本窗口新编辑仍保留，请导出草稿，勿继续同步旧项目。");return;}
+      abortRef.current?.abort();pRef.current=null;setProject(null);setChapterId("");setCandidate(null);setShelf(true);await draftCache.remove(id);return;
+    }
     if(!id||pRef.current?.id!==id||!report.items.some(item=>item.id===id&&item.action==="downloaded"))return;
     if(dirty.current!==saved.current||dirty.current!==marker.seq){notify("服务端版本已下载，本窗口的新编辑仍保留；请先导出草稿，再读取最新项目。");return;}
     const fresh=await api<Project>("/projects/"+id);
@@ -686,6 +693,15 @@ export default function App() {
         if (redownload) { setSyncOpen(true); void syncClient.run(); }
       },
     });
+  };
+  const deleteServerProject = (id:string) => {
+    const book=books.find(b=>b.id===id);
+    setDialog({title:"删除服务端项目",description:`删除“${book?.name||id}”前会创建备份；删除记录会阻止旧客户端重新上传。本机有未同步修改时会提示保留副本。`,fields:[],button:"备份并删除",
+      submit:async()=>{await flush();const {hash}=await api<{hash:string}>(`/projects/${id}/deletion-check`);await api(`/projects/${id}`,"DELETE",{hash});if(pRef.current?.id===id){pRef.current=null;setProject(null);setChapterId("");setShelf(true);await draftCache.remove(id)}await refreshBooks();notify("服务端项目已删除，已保留备份并记录同步删除状态")}});
+  };
+  const resolveDeletedProject = (id:string,hash:string,keep:boolean) => {
+    setDialog({title:keep?"保留为独立项目":"确认服务端删除",description:keep?"将本机稿件复制为新项目，原项目移入本机备份目录。新项目可以独立同步。":"将旧项目移入本机备份目录，不再上传到服务端。",fields:[],button:keep?"保留独立副本":"确认移除",
+      submit:async()=>{await flush();await api(`/projects/${id}/resolve-deleted`,"POST",{hash,keep});if(pRef.current?.id===id){pRef.current=null;setProject(null);setChapterId("");setShelf(true);await draftCache.remove(id)}syncClient.forgetProject(id);await refreshBooks();notify("删除通知已处理，旧项目已保留本机备份")}});
   };
   const openProject = async (id: string) => {
     try {
@@ -1027,7 +1043,7 @@ export default function App() {
     instruction: taskMode === "revision"
       ? revisionInstruction(tasks || currentRevisionTasks()) + (instruction.trim() ? "\n补充要求：" + instruction : "")
       : (instruction || defaultInstruction(taskMode)) + (taskMode === "map" && mapSceneId ? "\n本次只绘制场景：" + (project?.entities.find(e => e.id === mapSceneId)?.name || "当前场景") : ""),
-    selection: taskMode === "revision" ? "" : selectionRef.current.text,
+    selection: ["revision", "title"].includes(taskMode) ? "" : selectionRef.current.text,
   });
   const saveMapToImages = (svg: string, name: string, sourceRunId: string) => {
     const images = pRef.current?.images || [];
@@ -1224,6 +1240,20 @@ export default function App() {
         abortRef.current = null;
       }
     }
+  };
+  const acceptTitle = (title: string) => {
+    const current = pRef.current;
+    if (!candidate?.complete || candidate.mode !== "title" || !current || current.id !== candidate.projectId || activeChapterRef.current !== candidate.chapterId) {
+      notify("项目或章节已切换，请回到原章使用标题"); return;
+    }
+    const target = current.chapters.find(c => c.id === candidate.chapterId);
+    if (!target || JSON.stringify(target.content) !== JSON.stringify(candidate.original) || contextSignature(current) !== candidate.contextSignature) {
+      notify("章节或资料已变化，请重新生成标题"); return;
+    }
+    patchChapter({ title });
+    edit(p => { const run = p.aiRuns.find(r => r.id === candidate.id); if (run) run.accepted = true; });
+    setCandidate(null);
+    notify("已采用章节标题");
   };
   const acceptCandidate = () => {
     if (!candidate?.complete || !chapter || !editorRef.current) return;
@@ -1480,7 +1510,7 @@ export default function App() {
           >
             {theme === "light" ? <Moon size={19} /> : <Sun size={19} />}
           </button>
-          <Button secondary onClick={()=>setSyncOpen(true)}>服务端同步</Button>
+          <Button secondary onClick={()=>setSyncOpen(true)}>设置</Button>
           <Button secondary onClick={() => importRef.current?.click()}>
             <Upload size={16} /> 导入项目
           </Button>
@@ -1540,6 +1570,7 @@ export default function App() {
               </div>
             </div>
           </button>
+          {syncClient.remote && <button className="text-button book-delete" onClick={()=>deleteServerProject(b.id)}><Trash2 size={13}/> 删除服务端项目</button>}
           {!syncClient.remote && <button className="text-button book-delete" disabled={syncClient.busy} onClick={() => deleteLocalProject(b.id)}><Trash2 size={13}/> 删除本机项目</button>}
           </div>
         ))}
@@ -1561,7 +1592,7 @@ export default function App() {
         </div>
       )}
       <footer className="shelf-footer">
-        Yantai · 本地小说写作工作台 <span>v0.5.2 / 每次落笔，都有迹可循</span>
+        Yantai · 本地小说写作工作台 <span>v0.5.3 / 每次落笔，都有迹可循</span>
       </footer>
     </div>
   );
@@ -2324,7 +2355,8 @@ export default function App() {
             )}
           </div>
           <div>
-            <SyncSettings client={syncClient} onDeleteLocal={id=>deleteLocalProject(id,true)} />
+            <SyncSettings client={syncClient} onDeleteLocal={id=>deleteLocalProject(id,true)} onResolveDeleted={resolveDeletedProject} />
+            <BackupSettings prepare={flush} onRestored={refreshBooks} notify={notify} />
             <ComfySettings config={config} onChange={comfy=>set({comfy})} onSaved={setConfig} notify={notify} />
             <div className="card">
               <div className="card-heading">
@@ -2730,6 +2762,7 @@ export default function App() {
           <option value="revision">按标记修改 · 依据修改意见</option>
           <option value="ideas">原创构思 · 不改正文</option>
           <option value="review">AI 审稿 · 不改正文</option>
+          <option value="title">生成标题 · 多个候选</option>
           <option value="map">场景平面图（SVG）</option>
           <option value="comfyui">场景绘制（ComfyUI）</option>
         </select>
@@ -2813,14 +2846,15 @@ export default function App() {
             </span>
           </div>
           {["expand", "rewrite"].includes(candidate.mode) && candidate.text && <TextDiff before={candidate.selection.text || docText(candidate.original)} after={candidate.text} onLocate={locateSource} />}
+          {candidate.mode === "title" && <TitleCandidates text={candidate.text} complete={!!candidate.complete} disabled={generating} onAccept={acceptTitle} />}
           {candidate.mode === "revision" && <div className="candidate-text"><RevisionCandidate text={candidate.text} tasks={candidate.revisionTasks || []} complete={candidate.complete} retrying={candidate.retrying} appliedIds={appliedRevisionIds()} onReplace={replaceOneRevision} onLocate={locateSource}/></div>}
           {candidate.mode === "review" && <div className="candidate-text">{candidate.complete?<ReviewResult onReplaceAll={()=>replaceAllReview(candidate.id)} onLocate={locateSource} text={candidate.text} document={editorRef.current?.state.doc} busy={generating} onReplace={suggestion=>replaceOneReview(suggestion,candidate.id)} onGenerate={()=>runAI("review",candidate.text)}/>:generating?<p className="muted">正在审稿并生成可替换的修改段落……</p>:<><p className="info-note">审稿未完成，以下是已收到的部分内容，可复制留存；未开放段落替换。错误记录可在模型与设置中查看。</p><AIContent text={candidate.text}/></>}</div>}
           {candidate.mode === "map" && candidate.complete && <SceneMapPreview onDelete={()=>deleteMap(candidate.id)} text={candidate.text} onSave={(svg,name)=>saveMapToImages(svg,name,candidate.id)} onDownload={(svg,name)=>{download(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}),name).catch(e=>notify(e.message));}} />}
-          <div className="candidate-text" hidden={candidate.mode === "revision" || candidate.mode === "review" || (candidate.mode === "map" && candidate.complete)}>
+          <div className="candidate-text" hidden={candidate.mode === "title" || candidate.mode === "revision" || candidate.mode === "review" || (candidate.mode === "map" && candidate.complete)}>
             {candidate.text ? <AIContent text={candidate.text} onLocate={locateSource} sourceText={chapter?.text} /> : <span className="muted">等待模型响应……</span>}
           </div>
           <div className="candidate-actions">
-            {!["review", "ideas", "map"].includes(candidate.mode) && (
+            {!["review", "ideas", "map", "title"].includes(candidate.mode) && (
               <Button
                 disabled={!candidate.complete || generating || (candidate.mode === "revision" && !canAcceptRevision(candidate.text, candidate.revisionTasks || [],appliedRevisionIds()))}
                 onClick={acceptCandidate}
@@ -3150,7 +3184,7 @@ export default function App() {
                 <Library size={17} /> 返回书架
               </button>
               <div className="local-indicator">
-                <span className="status-dot" /> 本地工作空间 <span>v0.5.2</span>
+                <span className="status-dot" /> 本地工作空间 <span>v0.5.3</span>
               </div>
             </div>
           </aside>
@@ -3295,6 +3329,7 @@ export default function App() {
                       key={project.id + chapterId + ":" + editorEpoch}
                       chapter={chapter}
                       projectId={project.id}
+                      onTitleChange={title => patchChapter({ title })}
                       onChange={(content, text) =>
                         patchChapter({ content, text })
                       }
@@ -3401,7 +3436,7 @@ export default function App() {
           notify={notify}
         />
       )}
-      {syncOpen&&<div className="modal-overlay"><div className="modal wide"><button className="modal-close icon" aria-label="关闭服务端同步" onClick={()=>setSyncOpen(false)}><X size={20}/></button><SyncSettings client={syncClient} onDeleteLocal={id=>deleteLocalProject(id,true)}/></div></div>}
+      {syncOpen&&<div className="modal-overlay"><div className="modal wide"><button className="modal-close icon" aria-label="关闭设置" onClick={()=>setSyncOpen(false)}><X size={20}/></button><h2>设置</h2><SyncSettings client={syncClient} onDeleteLocal={id=>deleteLocalProject(id,true)} onResolveDeleted={resolveDeletedProject}/><BackupSettings prepare={flush} onRestored={refreshBooks} notify={notify}/></div></div>}
       {contextOpen && context && (
         <div className="modal-overlay">
           <div className="modal wide">
@@ -3563,6 +3598,7 @@ function openExternal(e: React.MouseEvent, address: string) {
   }
 }
 function defaultInstruction(mode: string) {
+  if (mode === "title") return "根据当前章节完整正文和章纲，生成6个不同风格的章节标题供选择。";
   return mode === "continue"
     ? "承接当前正文续写，不重复已有段落，按本章细纲推进。"
     : mode === "expand"

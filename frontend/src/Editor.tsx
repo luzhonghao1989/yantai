@@ -27,6 +27,7 @@ export type Selection = { from: number; to: number; text: string };
 type Props = {
   chapter: Chapter;
   projectId: string;
+  onTitleChange: (title: string) => void;
   onChange: (content: Doc, text: string) => void;
   onSelection: (s: Selection) => void;
   onReady: (editor: Editor) => void;
@@ -38,6 +39,7 @@ const pureCharacterCount = (text: string) => (text.match(/[\p{L}\p{N}]/gu) || []
 export default function WritingEditor({
   chapter,
   projectId,
+  onTitleChange,
   onChange,
   onSelection,
   onReady,
@@ -266,7 +268,10 @@ export default function WritingEditor({
           }
         >
           <div className="chapter-eyebrow">MANUSCRIPT / 正文</div>
-          <h1>{chapter.title}</h1>
+          <input className="manuscript-title" aria-label="章节标题" title="直接编辑章节标题，失焦或按回车保存" value={chapter.title}
+            onChange={e => onTitleChange(e.target.value)}
+            onBlur={e => { const title = e.target.value.trim(); onTitleChange(title || "未命名章节"); }}
+            onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur(); } }} />
           <div className="paper-rule" />
           <EditorContent editor={editor} />
           <div className="paper-end">✦</div>

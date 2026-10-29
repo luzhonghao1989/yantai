@@ -17,6 +17,7 @@ var ErrConflict = errors.New("内容已被其他窗口更新，请导出当前�
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Store struct {
+	backupMu       sync.Mutex
 	aiLogMu        sync.Mutex
 	syncMu         sync.Mutex
 	syncRunMu      sync.Mutex
@@ -131,6 +132,11 @@ func (s *Store) Save(p Project) (Project, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if d, e := s.projectDeletion(p.ID); e != nil {
+		return p, e
+	} else if d.ID != "" {
+		return p, ErrConflict
+	}
 	if err := s.prepareImages(&p); err != nil {
 		return p, err
 	}
@@ -175,6 +181,11 @@ func (s *Store) List() ([]ProjectInfo, error) {
 	out := []ProjectInfo{}
 	for _, e := range entries {
 		if !e.IsDir() || !validID.MatchString(e.Name()) {
+			continue
+		}
+		if d, err := s.projectDeletion(e.Name()); err != nil {
+			return nil, err
+		} else if d.ID != "" {
 			continue
 		}
 		p, err := s.Load(e.Name())
