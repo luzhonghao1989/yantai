@@ -224,11 +224,13 @@ export async function api<T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
+  // Mutating endpoints require JSON even when the action has no parameters.
+  const payload = body === undefined && !["GET", "HEAD"].includes(method.toUpperCase()) ? {} : body;
   const r = await fetch(apiURL(path), {
     method,
     signal,
-    headers: apiHeaders(body !== undefined),
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: apiHeaders(payload !== undefined),
+    body: payload === undefined ? undefined : JSON.stringify(payload),
   });
   if (!r.ok) {
     let msg = "请求失败";
