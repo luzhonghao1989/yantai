@@ -99,6 +99,10 @@ func BuildContext(p Project, req AIRequest, cfg AIConfig) (ContextPackage, error
 	add("当前正文", c.Text, c.Title)
 	add("选中文本", req.Selection, "仅修改此处时保留其余正文")
 	total := 600
+	if req.Mode == "review" {
+		// Include the additional review rubric in the input budget.
+		total += utf8.RuneCountInString(reviewNaturalnessGuidance) * 2
+	}
 	for _, s := range out.Sections {
 		total += utf8.RuneCountInString(s.Name+s.Text+s.Source) * 2
 	}

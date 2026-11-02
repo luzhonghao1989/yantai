@@ -1,10 +1,16 @@
+import useRememberedInput from "./useRememberedInput";
 import { useEffect, useRef, useState } from "react";
 import { api, boundEntities, type Chapter, type Config, type Project, type ProjectImage } from "./types";
 
 type ScenePrompt = { title: string; description: string; prompt: string; negativePrompt: string };
 
 export default function ComfyImagePanel({config,project,chapter,onSettings,onPrepare,onCheck,onImages,onDelete}:{onDelete:(image:ProjectImage,onDeleted:()=>void)=>void;config:Config|null;project:Project;chapter:Chapter;onSettings:()=>void;onPrepare:()=>Promise<{revision:number;signature:string}>;onCheck:(signature:string)=>void;onImages:(images:ProjectImage[])=>Promise<void>}){
-  const [requirements,setRequirements]=useState(""),[generated,setGenerated]=useState<ScenePrompt|null>(null),[seed,setSeed]=useState(""),[entityId,setEntityId]=useState(""),[kind,setKind]=useState<ProjectImage["kind"]>("scene");
+  const scope=`ai-input:${project.id}:${chapter.id}:comfy`;
+  const [requirements,setRequirements]=useRememberedInput<string>(scope+":requirements","");
+  const [seed,setSeed]=useRememberedInput<string>(scope+":seed","");
+  const [entityId,setEntityId]=useRememberedInput<string>(scope+":entity","");
+  const [kind,setKind]=useRememberedInput<ProjectImage["kind"]>(scope+":kind","scene",["scene","map","character","other"]);
+  const [generated,setGenerated]=useState<ScenePrompt|null>(null);
   const [busy,setBusy]=useState(false),[status,setStatus]=useState(""),[images,setImages]=useState<ProjectImage[]>([]),[saved,setSaved]=useState(false);
   const abort=useRef<AbortController|null>(null);
   useEffect(()=>()=>{abort.current?.abort();},[]);

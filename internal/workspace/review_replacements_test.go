@@ -29,6 +29,11 @@ func TestAIReviewRequestsReplaceableParagraphs(t *testing.T) {
 				t.Errorf("missing replaceable review contract: %s", word)
 			}
 		}
+		for _, rule := range []string{"对白生硬", "动作僵硬", "机械化叙述", "人物身份", "手中物品", "不设置禁词表", "不要机械补全主语宾语", "既有 suggestions 数组"} {
+			if !strings.Contains(body.Messages[0].Content, rule) {
+				t.Errorf("missing contextual naturalness review rule: %s", rule)
+			}
+		}
 		if !strings.Contains(body.Messages[1].Content, "对白更口语") {
 			t.Error("missing author review advice")
 		}

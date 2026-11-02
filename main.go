@@ -129,7 +129,7 @@ func main() {
 		}
 	}()
 	defer httpServer.Close()
-	err = wails.Run(&options.App{Title: "Yantai · 小说写作工作台", Width: 1500, Height: 960, MinWidth: 1050, MinHeight: 700, StartHidden: smoke, BackgroundColour: &options.RGBA{R: 245, G: 243, B: 237, A: 255}, AssetServer: &assetserver.Options{Assets: frontend.Assets()}, OnStartup: a.Startup, OnBeforeClose: a.BeforeClose, Bind: []interface{}{a}, SingleInstanceLock: &options.SingleInstanceLock{UniqueId: instanceID}, Windows: &windows.Options{WebviewIsTransparent: false}, EnableDefaultContextMenu: true})
+	err = wails.Run(&options.App{Title: "砚台 · 小说写作工作台", Width: 1500, Height: 960, MinWidth: 1050, MinHeight: 700, StartHidden: smoke, BackgroundColour: &options.RGBA{R: 245, G: 243, B: 237, A: 255}, AssetServer: &assetserver.Options{Assets: frontend.Assets()}, OnStartup: a.Startup, OnBeforeClose: a.BeforeClose, Bind: []interface{}{a}, SingleInstanceLock: &options.SingleInstanceLock{UniqueId: instanceID}, Windows: &windows.Options{WebviewIsTransparent: false}, EnableDefaultContextMenu: true})
 	if err != nil {
 		log.Fatal(err)
 	}

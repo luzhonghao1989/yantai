@@ -1,3 +1,4 @@
+import useRememberedInput from "./useRememberedInput";
 import BackupSettings from "./BackupSettings";
 import TitleCandidates from "./TitleCandidates";
 import AIErrorLog from "./AIErrorLog";
@@ -269,7 +270,7 @@ function Modal({
         <button type="button" className="modal-close icon" onClick={close}>
           <X size={20} />
         </button>
-        <div className="eyebrow">Yantai / 工作台</div>
+        <div className="eyebrow">砚台 / 工作台</div>
         <h2>{dialog.title}</h2>
         {dialog.description && <p className="muted">{dialog.description}</p>}
         {dialog.fields.map((f) => (
@@ -350,14 +351,15 @@ export default function App() {
     >(null);
   const [detection, setDetection] = useState<Detection | null>(null),
     [detecting, setDetecting] = useState(false);
-  const [instruction, setInstruction] = useState(""),
-    [mapSceneId, setMapSceneId] = useState(""),
-    [mode, setMode] = useState("continue"),
-    [context, setContext] = useState<ContextPackage | null>(null),
+  const aiInputScope = project && chapterId ? `ai-input:${project.id}:${chapterId}` : null;
+  const [mode, setMode] = useRememberedInput<string>(aiInputScope ? aiInputScope+":mode" : null, "continue", Object.keys(modeLabels));
+  const [instruction, setInstruction] = useRememberedInput<string>(aiInputScope ? aiInputScope+":instruction:"+mode : null, "");
+  const [mapSceneId, setMapSceneId] = useRememberedInput<string>(aiInputScope ? aiInputScope+":mapScene" : null, "");
+  const [query, setQuery] = useRememberedInput<string>(aiInputScope ? aiInputScope+":query" : null, "");
+  const [context, setContext] = useState<ContextPackage | null>(null),
     [contextOpen, setContextOpen] = useState(false),
     [candidate, setCandidate] = useState<Candidate | null>(null),
     [generating, setGenerating] = useState(false),
-    [query, setQuery] = useState(""),
     [results, setResults] = useState<SearchResult[]>([]),
     [searching, setSearching] = useState(false);
   const [loreImport, setLoreImport] = useState<{rows: Record<string,string>[]; stageId:string} | null>(null);
@@ -367,7 +369,7 @@ export default function App() {
   const [, signalEditorReady] = useState(0);
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
   const [styleAnalysis, setStyleAnalysis] = useState("");
-  const [inspirationMode, setInspirationMode] = useState("keyword-local");
+  const [inspirationMode, setInspirationMode] = useRememberedInput<string>(aiInputScope ? aiInputScope+":inspirationMode" : null, "keyword-local");
   const scope = inspirationMode.endsWith("-web") ? "web" : "local";
   const [modelDiscoveryStatus, setModelDiscoveryStatus] = useState("");
   const [modelCapacityStatus, setModelCapacityStatus] = useState("");
@@ -662,7 +664,6 @@ export default function App() {
     setContext(null);
     setReview(null);
     setDetection(null);
-    setMapSceneId("");
     setRevisionExcluded([]);
     selectionRef.current = { from: 0, to: 0, text: "" };
   }, [chapterId, project?.id]);
@@ -962,7 +963,7 @@ export default function App() {
         ? `${project.name}-备份-${new Date().toISOString().replace(/[:.]/g, "-")}.json`
         : project.name + "." + format;
       const completed = await download(await r.blob(), filename);
-      if (completed && format === "json") notify("项目备份已导出，可在另一台电脑的Yantai中导入");
+      if (completed && format === "json") notify("项目备份已导出，可在另一台电脑的砚台中导入");
     } catch (e) {
       notify((e as Error).message);
     }
@@ -1036,15 +1037,18 @@ export default function App() {
     if (!editorRef.current) throw Error("请先打开正文编辑器。");
     return revisionTasks(editorRef.current.state.doc, revisionExcluded);
   };
-  const aiInput = (taskMode = mode, tasks?: RevisionNoteEntry[]) => ({
+  const aiInput = (taskMode = mode, tasks?: RevisionNoteEntry[]) => {
+    const taskInstruction = taskMode === mode ? instruction : (aiInputScope ? localSettings.getItem(aiInputScope+":instruction:"+taskMode) || "" : "");
+    return ({
     chapterId,
     revision: pRef.current!.revision,
     mode: taskMode,
     instruction: taskMode === "revision"
-      ? revisionInstruction(tasks || currentRevisionTasks()) + (instruction.trim() ? "\n补充要求：" + instruction : "")
-      : (instruction || defaultInstruction(taskMode)) + (taskMode === "map" && mapSceneId ? "\n本次只绘制场景：" + (project?.entities.find(e => e.id === mapSceneId)?.name || "当前场景") : ""),
+      ? revisionInstruction(tasks || currentRevisionTasks()) + (taskInstruction.trim() ? "\n补充要求：" + taskInstruction : "")
+      : (taskInstruction || defaultInstruction(taskMode)) + (taskMode === "map" && mapSceneId ? "\n本次只绘制场景：" + (project?.entities.find(e => e.id === mapSceneId)?.name || "当前场景") : ""),
     selection: ["revision", "title"].includes(taskMode) ? "" : selectionRef.current.text,
   });
+  };
   const saveMapToImages = (svg: string, name: string, sourceRunId: string) => {
     const images = pRef.current?.images || [];
     if (images.some(i=>i.sourceRunId===sourceRunId)) { notify("这张地图已在图片栏中"); return; }
@@ -1499,7 +1503,7 @@ export default function App() {
             <Feather size={23} />
           </span>
           <div>
-            Yantai <small>故事，慢慢写。</small>
+            砚台 <small>故事，慢慢写。</small>
           </div>
         </div>
         <div className="inline">
@@ -1586,13 +1590,13 @@ export default function App() {
         <div className="welcome-note">
           <BookOpen size={20} />
           <div>
-            <b>欢迎来到Yantai</b>
+            <b>欢迎来到砚台</b>
             <p>新建你的小说，或打开示例，体验阶段设定、故事线与写作工作台。</p>
           </div>
         </div>
       )}
       <footer className="shelf-footer">
-        Yantai · 本地小说写作工作台 <span>v0.5.3 / 每次落笔，都有迹可循</span>
+        砚台 · 本地小说写作工作台 <span>v0.5.4 / 每次落笔，都有迹可循</span>
       </footer>
     </div>
   );
@@ -2754,6 +2758,7 @@ export default function App() {
           </button>
         </p>
       </div>
+      <p className="muted">本章的任务和要求会自动保存，下次打开可继续使用。</p>
       <Field label="写作任务">
         <select value={mode} onChange={(e) => setMode(e.target.value)}>
           <option value="continue">续写 · 追加到正文</option>
@@ -2761,7 +2766,7 @@ export default function App() {
           <option value="rewrite">改写 · 选区或整章</option>
           <option value="revision">按标记修改 · 依据修改意见</option>
           <option value="ideas">原创构思 · 不改正文</option>
-          <option value="review">AI 审稿 · 不改正文</option>
+          <option value="review">AI 审稿 · 对白 / 动作 / 文风</option>
           <option value="title">生成标题 · 多个候选</option>
           <option value="map">场景平面图（SVG）</option>
           <option value="comfyui">场景绘制（ComfyUI）</option>
@@ -2897,7 +2902,7 @@ export default function App() {
       <div className="panel-heading">
         <div className="eyebrow">EDITORIAL REVIEW</div>
         <h3>把文字，再读一遍。</h3>
-        <p>本地检查常见错别字与标点，AI 审稿分析文风与情节。</p>
+        <p>本地检查常见错别字与标点，AI 审稿检查对白生硬、动作僵硬、机械化表达、文风与情节。</p>
       </div>
       <div className="inline">
         <Button disabled={!chapter} onClick={runReview}>
@@ -3053,7 +3058,7 @@ export default function App() {
       {loading ? (
         <div className="startup">
           <Feather size={40} />
-          <h2>Yantai</h2>
+          <h2>砚台</h2>
           <Loader2 className="spin" size={22} />
         </div>
       ) : shelf || !project ? (
@@ -3066,7 +3071,7 @@ export default function App() {
                 <Feather size={22} />
               </span>
               <div>
-                Yantai <small>小说写作工作台</small>
+                砚台 <small>小说写作工作台</small>
               </div>
             </div>
             <button className="project-switch" onClick={goShelf}>
@@ -3184,7 +3189,7 @@ export default function App() {
                 <Library size={17} /> 返回书架
               </button>
               <div className="local-indicator">
-                <span className="status-dot" /> 本地工作空间 <span>v0.5.3</span>
+                <span className="status-dot" /> 本地工作空间 <span>v0.5.4</span>
               </div>
             </div>
           </aside>
@@ -3606,7 +3611,7 @@ function defaultInstruction(mode: string) {
       : mode === "rewrite"
         ? "改写选中段落；若未选中则改写本章，保持剧情与人设。"
         : mode === "review"
-          ? "审查当前章的文风与设定连续性，引用原文并给出具体改法。"
+          ? "审查当前章的对白生硬、动作僵硬、机械化叙述，以及文风与设定连续性；结合人物和场景引用原文，给出有依据的实际改文。"
           : mode === "map"
             ? "依据本章当前阶段有效场景绘制平面图，列出房间、地点与道路连接，未知方位在备注中说明为示意；只返回约定的地图 JSON。"
           : "根据当前细纲与设定提出三种原创场景方案。";
